@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "cross-env NODE_ENV=development nodemon src/index.ts",
-    "build": "tsc",
+    "build": "prisma generate && tsc",
     "start": "cross-env NODE_ENV=production node dist/index.js",
     "start:dev": "cross-env NODE_ENV=development node dist/index.js",
     "worker": "cross-env NODE_ENV=development nodemon --config nodemon.worker.json",
