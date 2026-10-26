@@ -1,0 +1,56 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: upasana-app
+    ports:
+      - "${PORT:-5000}:5000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    restart: always
+
+  # The background worker. Same image, different entrypoint.
+  #
+  # Not a timer inside the API: every queued job runs ONLY here. An API deployed
+  # without this service serves every screen correctly and silently never does
+  # any of the work behind them — jobs pile up `pending` with no error anywhere.
+  # That failure is invisible until someone notices the work never happened.
+  #
+  # Drop this service if your product has no background work yet; add it back the
+  # moment it does.
+  #
+  # No `ports`: it takes work from the job collection, nothing connects to it.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: upasana-worker
+    command: ["pnpm", "worker:start"]
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - app
+    # The loop survives DB blips on its own, so a restart here means the process
+    # actually died. Always bring it back — see above for what stops otherwise.
+    restart: always
+
+# Optional: a local MongoDB. Note that Prisma's Mongo connector needs a replica
+# set for transactions, so a plain single-node `mongo:latest` is fine for this
+# template (nothing here uses a transaction) but will bite the first time you
+# reach for `$transaction`. Use Atlas, or run this with `--replSet`.
+#
+#  mongodb:
+#    image: mongo:latest
+#    container_name: upasana-db
+#    ports:
+#      - "27017:27017"
+#    volumes:
+#      - mongo-data:/data/db
+#
+# volumes:
+#  mongo-data:

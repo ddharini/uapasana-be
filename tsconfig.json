@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "rootDir": "src",
+    "outDir": "dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*"],
+  // Tests are type-checked by tsconfig.test.json, never emitted: `build` runs
+  // tsc straight into dist/, and a *.test.js shipped to production is both
+  // dead weight and a vitest import the runtime does not have.
+  "exclude": ["node_modules", "src/**/*.test.ts"]
+}

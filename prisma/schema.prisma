@@ -1,0 +1,975 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// The SaaS chassis: auth, account lifecycle, background jobs.
+//
+// Everything here is product-agnostic. Add your own models below the marker at
+// the bottom of this file and hang them off `User` with `onDelete: Cascade`, so
+// `scripts/hard-delete-scheduled-accounts.ts` stays a one-line purge.
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sessions Session[]
+  accounts Account[]
+
+  /// When the user finished onboarding. Null means they have not, and the
+  /// frontend's onboarding guard should send them to /onboarding until they do
+  /// — so a null here is load-bearing, not merely missing.
+  ///
+  /// Stamped once and never moved: the endpoint is idempotent.
+  onboardedAt DateTime?
+
+  /// "user", "staff", "sanchalak" or "admin". Staff, sanchalaks and admins
+  /// use the registration desk (`requireStaff`) — a sanchalak only for their
+  /// own `mandal`; only "admin" reaches the admin panel (`requireAdmin`). A new signup is "user" and sees nothing until someone
+  /// grants a role. `input: false` in Better Auth's `additionalFields`
+  /// (src/lib/auth.ts) means no signup/update body can set this. It changes in
+  /// exactly two places: `pnpm grant-role <email> <role>` (how the first admin
+  /// is made), and accepting an `AdminInvite` an existing admin sent. There is
+  /// no self-serve path to admin by design.
+  role String @default("user")
+
+  /// The mandal a "sanchalak" coordinates: they see, register and edit only
+  /// that mandal's registrations. Null for every other role.
+  mandal String?
+
+  /// Null: a normal, active account. Set: the account requested deletion and is
+  /// in its 30-day grace period — `scripts/hard-delete-scheduled-accounts.ts`
+  /// purges anything still set 30 days after this timestamp. Nothing else is
+  /// touched at the moment this is set, which is the entire point of a *soft*
+  /// delete. Surfaced to the
+  /// frontend via Better Auth's `additionalFields` (`input: false` — only
+  /// `POST /users/delete` and `/users/restore` may write it), so a signed-back-in
+  /// user can be sent to a restore screen instead of the app.
+  deletedAt DateTime?
+
+  // ---- Your product's relations go here ----
+
+  @@index([deletedAt])
+  @@map("user")
+}
+
+/// One row per account-lifecycle event — requested, restored, or actually
+/// purged. Deliberately NOT a Prisma relation to `User`: a relation would be
+/// cascade-deleted along with the user it describes, which would erase the
+/// only record that a deletion ever happened right at the moment it matters
+/// most. `userId` and `email` are plain, denormalised values instead, so this
+/// row is legible on its own long after the account it names is gone.
+model AccountAuditLog {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  email  String
+
+  /// "delete_requested" | "delete_restored" | "hard_deleted"
+  action String
+  /// Free-form context — which verification path was used, why a hard delete
+  /// ran, an IP/user-agent. Never anything a support ticket would need to
+  /// redact; this is an operational trail, not user content.
+  detail String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@map("account_audit_log")
+}
+
+model Session {
+  id        String   @id @map("_id")
+  expiresAt DateTime
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @map("_id")
+  accountId             String
+  providerId            String
+  userId                String    @db.ObjectId
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @map("_id")
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+/// The background job queue. See src/lib/queue/claim.ts for how a job is
+/// claimed atomically, and src/worker/index.ts for the process that runs them.
+model Job {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  /// Whatever kinds you register in `JobKind` (src/lib/queue/claim.ts) and
+  /// route in the worker's `dispatch`.
+  kind    String
+  payload Json
+
+  /// "pending" | "running" | "completed" | "failed"
+  status      String    @default("pending")
+  runAfter    DateTime  @default(now())
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  lastError   String?
+  lockedAt    DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([status, runAfter])
+  @@map("job")
+}
+
+/// Every billable call to a paid third-party API, priced at the moment it
+/// happened.
+///
+/// Metering at the call site rather than reading an invoice a month later is
+/// how you find out you are losing money on a plan before the invoice does.
+/// `src/lib/usage.ts` is the writer; the Anthropic client (src/lib/ai/claude.ts)
+/// is the one call site wired up out of the box.
+model UsageEvent {
+  id     String  @id @default(auto()) @map("_id") @db.ObjectId
+  userId String? @db.ObjectId
+
+  /// A stable label for what was called, e.g. "ai:summarize".
+  endpoint   String
+  /// Whatever the endpoint is billed by — tokens, images, requests.
+  units      Int      @default(1)
+  costUsd    Float
+  occurredAt DateTime @default(now())
+
+  @@index([userId, occurredAt])
+  @@index([endpoint, occurredAt])
+  @@map("usage_event")
+}
+
+// ---------------------------------------------------------------------------
+// Product models — Upasana.
+//
+// Add your models below and hang them off `User` with `onDelete: Cascade`.
+// ---------------------------------------------------------------------------
+
+/// An invitation from an admin to make someone else an admin.
+///
+/// Sent to an email address or a mobile number. The link carries a random
+/// token; only its SHA-256 is stored, so a leaked database row cannot be turned
+/// back into a working link. Single use: accepting flips `status` atomically,
+/// and inviting the same address again revokes any earlier pending link.
+///
+/// An email invite can only be accepted by an account with that same email, so
+/// a forwarded link is useless to anyone else. A mobile invite has no account
+/// field to match against (accounts are email-based), so whoever opens it
+/// first and signs in takes it — which is why it expires.
+model AdminInvite {
+  id        String @id @default(auto()) @map("_id") @db.ObjectId
+  tokenHash String @unique
+
+  /// "email" | "mobile" — how the link was meant to reach them.
+  channel String
+  /// Lowercased. Set when `channel` is "email".
+  email   String?
+  /// E.164, e.g. "+919876543210". Set when `channel` is "mobile".
+  mobile  String?
+  /// Optional, so the list reads "Harit Patel" rather than a bare number.
+  name    String?
+
+  /// The role accepting grants: "admin" or "sanchalak".
+  role   String  @default("admin")
+  /// For a sanchalak invite, the mandal they will coordinate.
+  mandal String?
+
+  /// "pending" | "accepted" | "revoked". Expiry is not a status: it is read
+  /// off `expiresAt`, so nothing has to run at the moment a link lapses.
+  status    String   @default("pending")
+  expiresAt DateTime
+
+  invitedById   String @db.ObjectId
+  /// Denormalised so the invitee's landing page can say who invited them
+  /// without a join, and so it still reads right if that admin is removed.
+  invitedByName String
+
+  acceptedById String?   @db.ObjectId
+  acceptedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([email])
+  @@index([mobile])
+  @@map("admin_invite")
+}
+
+/// One verification code sent to a mobile number, and — once the right code
+/// is entered — the proof that the number was verified.
+///
+/// The registration form verifies the primary contact's number before it can
+/// be submitted. Verifying hands the browser a one-time token; the
+/// registration request carries it back, and `POST /registrations` refuses
+/// without a token for that same number. So the check holds even for a request
+/// that never went through the form.
+///
+/// Only hashes are stored: the code is HMAC'd with the server secret (a bare
+/// SHA-256 of a 6-digit code is reversible by trying all million), the token is
+/// SHA-256'd (it is long and random). Rows are also how sending is rate
+/// limited — see src/lib/otp.ts.
+model PhoneVerification {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  /// E.164, e.g. "+919876543210".
+  mobile    String
+  codeHash  String
+  /// Wrong guesses so far. The code stops working at OTP_MAX_ATTEMPTS.
+  attempts  Int      @default(0)
+  /// When the code stops working.
+  expiresAt DateTime
+
+  /// Set once the right code is entered.
+  verifiedAt     DateTime?
+  /// The proof handed to the browser on success. Plain index rather than
+  /// `@unique`: unverified rows have none, and MongoDB counts a missing field
+  /// as a value (see `Registration.contactMobile`).
+  tokenHash      String?
+  tokenExpiresAt DateTime?
+  /// Set when a registration used the token. A token works once.
+  consumedAt     DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([mobile, createdAt])
+  @@index([createdAt])
+  @@index([tokenHash])
+  @@map("phone_verification")
+}
+
+/// One registration: an individual or a family, with every person in it
+/// embedded as a member. Embedded rather than a separate collection because
+/// a member is never looked up on their own — staff always find the booking
+/// first — and because the whole party is written in one go.
+///
+/// Field for field the same shape as the frontend's `Registration` type
+/// (upasana-fe/src/features/registrations/types.ts). The allowed values of the
+/// string "enums" live in src/lib/event.ts and are checked on the way in.
+model Registration {
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  /// Human-facing number on the confirmation screen: the family number
+  /// ("DM-F-0031") for a family, the person's own number ("DM-0142") for an
+  /// individual. See src/lib/registration-codes.ts.
+  code     String @unique
+  /// Orders registrations; from the "registration" counter (registration-codes.ts).
+  sequence Int    @unique
+
+  /// "individual" | "family"
+  type      String
+  /// The family name, e.g. "Patel family". Null for individuals. Named
+  /// `groupName` from when groups were a type; kept to avoid a data migration.
+  groupName String?
+  mandal    String
+
+  members     RegistrationMember[]
+  /// The booking spans from the first member in to the last member out.
+  arrival     StayPoint
+  departure   StayPoint
+  travel      Travel
+  /// Devotees from abroad only, when they filled any of it in. When the party
+  /// does not all land and fly out on the same days, each person's flights are
+  /// on `RegistrationMember.indiaTravel` and this only says whether anyone
+  /// needs a pickup (no flights on it). Read a person's through `flightsOf`.
+  indiaTravel IndiaTravel?
+
+  accommodationRequired Boolean
+  /// True when anyone in the party is arriving early for seva as a Swayam
+  /// Sevak; each person's own answer is `RegistrationMember.earlySeva`. It was
+  /// first asked once for the whole party, so where a member's is null this
+  /// answers for them (`isSevak`). Optional so older rows still read.
+  earlySeva             Boolean?
+  notes                 String?
+
+  /// "confirmed" (shown as "Registered") | "checked_in" | "cancelled".
+  /// Older ones may say "pending", read as "confirmed" (statusOf in src/lib/event.ts).
+  status   String  @default("confirmed")
+  /// One of the 64 made-up registrations for demos (src/lib/sample-registrations.ts).
+  /// Admins add and remove them all at once from the Registrations screen;
+  /// removing deletes only these, never a real registration.
+  isSample Boolean @default(false)
+
+  /// "self" when the devotee used the public form, "staff" when registered at
+  /// the desk by a signed-in staff member (`createdById`).
+  source      String
+  createdById String? @db.ObjectId
+
+  /// The primary contact's number (E.164), copied out of `members` so the
+  /// database itself can enforce ONE registration per contact number: a
+  /// partial unique index, created by scripts/ensure-partial-indexes.ts. Not
+  /// `@unique`: MongoDB treats a missing field as a value, so a plain unique
+  /// index allows only ONE registration without a number and refuses to build
+  /// once there are two. Prisma cannot express the partial index that ignores
+  /// them, and `prisma db push` drops indexes it does not know about — so run
+  /// that script after every push (`pnpm db:push` does). Kept in step with
+  /// members[0] by toCreateData.
+  contactMobile String?
+
+  /// How the primary contact's mobile was confirmed: "otp" (a code on
+  /// WhatsApp) or "in_person" (a sanchalak or admin vouched for it at the
+  /// desk). Null on registrations from before verification existed.
+  mobileVerification String?
+  /// Who vouched, for "in_person".
+  verifiedByName     String?
+
+  /// The last change after submitting, and who made it: a team member's
+  /// name, or "the devotee" for an edit made online after an OTP.
+  editedAt     DateTime?
+  editedByName String?
+
+  /// The room details last sent to the contact (see src/lib/accommodation.ts,
+  /// `StayNotice`), when, and by whom. Kept as sent, so the team can see when
+  /// an allotment has changed since — and the devotee's page only shows rooms
+  /// that match what they were told.
+  stayNotice           Json?
+  stayNoticeSentAt     DateTime?
+  stayNoticeSentByName String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([mandal])
+  @@index([createdAt])
+  @@map("registration")
+}
+
+type RegistrationMember {
+  /// Stable across edits (kept by toCreateData), because room allotments are
+  /// keyed on it. Older registrations have "m0", "m1", …; new people get a
+  /// random one.
+  id                 String
+  /// The person's own registration number, e.g. "DM-0142". Kept while they
+  /// stay on the registration. Set on everyone since 13 Oct 2026.
+  code               String?
+  /// The parts below joined ("Ramesh Kantilal Patel"): what lists, search
+  /// and reports show.
+  fullName           String
+  /// Asked in parts since October 2026. Null on people saved before: the API
+  /// splits their `fullName` (see splitFullName).
+  firstName          String?
+  middleName         String?
+  surname            String?
+  /// "male" | "female"
+  gender             String
+  age                Int
+  /// E.164, e.g. "+919876543210". Required on the primary contact.
+  mobile             String?
+  relation           String?
+  isPrimary          Boolean
+  needsAssistance    Boolean
+  assistanceNote     String?
+  /// Aged 40 or under (YOUTH_MAX_AGE): whether they will attend the Youth
+  /// Convention. Optional, so null when not answered or not asked.
+  attendsYouthConvention Boolean?
+  arrival            StayPoint
+  departure          StayPoint
+  /// Whether this person asked for a bed. Lets a family put up only some of
+  /// its members. Null on registrations from before it existed: read it as
+  /// the registration's `accommodationRequired` (see `wantsBed`).
+  needsAccommodation Boolean?
+  /// Arriving early for seva as a Swayam Sevak: this person's days may be any
+  /// in January or February 2027 (SEVA_DATES), not only around the event.
+  /// Null on rows saved before it was asked per person: the registration's
+  /// `earlySeva` then answers for everyone (`isSevak`).
+  earlySeva          Boolean?
+  /// How this person comes and goes, only when the party does not all travel
+  /// the same way (the registration's `travel.mode` is then "separate").
+  /// Null otherwise: everyone travels as `Registration.travel` says. Vehicles
+  /// are never on it — the party's vehicles stay on the registration, since a
+  /// parking pass is per car, not per person in it.
+  travel             Travel?
+  /// From abroad, when the party does not all land and fly out on the same
+  /// days: this person's Ahmedabad airport pickup and flight out. Null
+  /// otherwise: the registration's `indiaTravel` is everyone's (`flightsOf`).
+  indiaTravel        IndiaTravel?
+}
+
+/// A calendar day at the venue ("2027-01-29") and a rough time of day.
+type StayPoint {
+  date String
+  /// "morning" | "afternoon" | "evening"
+  slot String
+  /// Whether they take the meal served in that slot (breakfast, lunch or
+  /// dinner): on arrival the first meal here, on leaving the last. Null on
+  /// registrations from before it was asked.
+  meal Boolean?
+}
+
+/// For devotees from abroad: a pickup from and a drop to Ahmedabad airport,
+/// the only airport the transport team covers. Asked, optionally, on the
+/// people step when the mandal is overseas — once for the party, or per person.
+type IndiaTravel {
+  needsPickup Boolean
+  /// The flight they land on; with `needsPickup`.
+  arrival     IndiaFlight?
+  needsDrop   Boolean
+  /// The flight they leave on; with `needsDrop`.
+  departure   IndiaFlight?
+}
+
+/// A flight into or out of Ahmedabad airport.
+type IndiaFlight {
+  /// ISO calendar day, e.g. "2027-01-24".
+  date   String
+  /// 24-hour local time, e.g. "06:30", when known.
+  time   String?
+  flight String?
+}
+
+type Travel {
+  /// "personal_vehicle" | "mandal_bus" | "train" | "flight" | "public_bus" |
+  /// "other"; on a registration also "local", "not_filled", or "separate"
+  /// when each person's own is on `RegistrationMember.travel`.
+  mode           String
+  /// Personal vehicle only: how many, and their numbers for parking passes.
+  /// The numbers are optional — the list can be shorter than the count, or
+  /// empty. Replaced a single `vehicleNumber`; see
+  /// scripts/migrate-vehicle-numbers.ts.
+  vehicleCount   Int?
+  vehicleNumbers String[]
+  /// Train or flight number, or the bus operator.
+  reference      String?
+  /// Train only: when it reaches Ahmedabad, "HH:MM", and at which station.
+  arrivalTime    String?
+  station        String?
+  /// Train or public bus (or flight, no longer offered): a pickup in Ahmedabad.
+  needsPickup    Boolean
+  /// Train or flight only: a drop to the station or airport when leaving.
+  /// Optional because registrations from before it existed do not have it.
+  needsDrop      Boolean?
+  /// With a drop: how they leave ("train" | "public_bus", not always how they
+  /// came), the train or bus home, its station (train only), and when it
+  /// leaves ("HH:MM").
+  departureMode      String?
+  departureReference String?
+  departureStation   String?
+  departureTime      String?
+}
+
+/// Somewhere devotees stay: a guest house now, hotels later. Its rooms are
+/// embedded — a room is only ever listed, edited or allotted as part of its
+/// place.
+///
+/// Read by every desk role, written by admins only. `pnpm seed:accommodation`
+/// adds the four guest houses from the accommodation sheet.
+model AccommodationPlace {
+  id   String @id @default(auto()) @map("_id") @db.ObjectId
+  name String @unique
+  /// "guest_house" | "hotel"
+  kind String @default("guest_house")
+
+  address           String
+  area              String?
+  mapUrl            String?
+  coordinatorName   String?
+  /// E.164.
+  coordinatorMobile String?
+  notes             String?
+
+  /// Order on screen; lower first.
+  sortOrder Int @default(0)
+
+  rooms AccommodationRoom[]
+
+  /// Bumped inside every transaction that allots into this place or changes
+  /// its rooms. Two such transactions at once then write the same document,
+  /// and MongoDB aborts one of them — which is what stops two volunteers
+  /// filling the last bed twice.
+  version Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("accommodation_place")
+}
+
+type AccommodationRoom {
+  /// Stable: allotments point at it, so relabelling a room keeps its people.
+  id        String
+  /// "12", "G-04", "Hall A".
+  label     String
+  beds      Int
+  /// Mattresses the room can take on top of its beds, used only when the
+  /// beds run out. Missing on rooms saved before it existed: none.
+  extraBeds Int?
+  /// "gents" | "ladies" | "family" | "general" (anyone; only the beds limit it)
+  kind      String
+  /// 0 = ground floor, 1 = 1st floor … 4 = 4th floor. People who need
+  /// assistance or are 60+ are offered the lowest floors first.
+  floor     Int
+}
+
+/// Rooms at a place handed to one mandal. The mandal's coordinator decides who
+/// sleeps where and reports how many people are in each room; the team only
+/// sees those numbers. Replaced per-person allotment (`RoomAllotment`) on
+/// 2026-10-11.
+///
+/// Staff and admins give and take back rooms; the coordinator's sanchalak
+/// (same mandal), staff and admins update the occupancy. A room belongs to at
+/// most one mandal — checked inside a transaction that bumps the place's
+/// `version`, like the allotments were.
+model MandalStay {
+  id      String @id @default(auto()) @map("_id") @db.ObjectId
+  placeId String @db.ObjectId
+  /// One of MANDALS.
+  mandal  String
+
+  coordinatorName   String
+  /// E.164.
+  coordinatorMobile String
+  notes             String?
+
+  /// `AccommodationRoom.id`s in the place.
+  roomIds   String[]
+  /// People in each room, as the coordinator last reported. A room missing
+  /// here has not been reported yet.
+  occupancy RoomOccupancy[]
+
+  occupancyUpdatedAt     DateTime?
+  occupancyUpdatedByName String?
+
+  createdByName String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([placeId, mandal])
+  @@index([mandal])
+  @@map("mandal_stay")
+}
+
+type RoomOccupancy {
+  roomId String
+  people Int
+}
+
+/// PAUSED 2026-10-11 — per-person allotment is switched off (rooms now go to
+/// mandals, see `MandalStay`). Kept so the feature and its data can come back.
+///
+/// One person's bed: a member of a registration, in a room. Their nights come
+/// from the member's own arrival and departure, so the same bed can go to
+/// someone else on other nights.
+model RoomAllotment {
+  id             String @id @default(auto()) @map("_id") @db.ObjectId
+  registrationId String @db.ObjectId
+  /// `RegistrationMember.id`.
+  memberId       String
+  placeId        String @db.ObjectId
+  roomId         String
+
+  allottedByName String
+  allottedAt     DateTime @default(now())
+
+  /// The team let them share a family room with another registration —
+  /// relatives registered separately — so they are not "another family" in it.
+  sharesRoom Boolean @default(false)
+
+  @@unique([registrationId, memberId])
+  @@index([placeId])
+  @@map("room_allotment")
+}
+
+/// One day of the event programme, with its sessions embedded — a session is
+/// only ever shown, edited or moved as part of its day, like a registration's
+/// members.
+///
+/// Read by every desk role, written by admins only. `pnpm seed:schedule`
+/// fills in a placeholder programme on an empty database.
+model ScheduleDay {
+  id    String  @id @default(auto()) @map("_id") @db.ObjectId
+  /// ISO calendar day at the venue, e.g. "2027-01-01". One entry per day.
+  date  String  @unique
+  /// What sets the day apart, e.g. "Opening day". Optional.
+  theme String?
+
+  /// Stored in any order; the API returns them sorted by start time, which is
+  /// how "add between two sessions" places a new one.
+  sessions ScheduleSession[]
+
+  /// The last change, and the admin who made it.
+  editedAt     DateTime?
+  editedByName String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("schedule_day")
+}
+
+type ScheduleSession {
+  /// A random UUID, so one session can be edited or deleted in place.
+  id     String
+  /// 24-hour "HH:MM", venue time. `end` is after `start`, same day.
+  start  String
+  end    String
+  title  String
+  /// A built-in key — "sabha" | "aarti" | "prasad" | "cultural" — or a
+  /// custom type an admin named, stored as typed (e.g. "Yoga Shibir").
+  kind   String
+  /// Where it happens. Optional when `mapUrl` is given.
+  place  String?
+  /// A Google Maps link to the place, for guests finding their way.
+  mapUrl String?
+  note   String?
+}
+
+/// One press of "Publish changes": a frozen copy of the whole programme.
+///
+/// `ScheduleDay` is the admins' working draft; devotees only ever see the
+/// newest publication, at the public /schedule page. Earlier ones are kept as
+/// a history of what was shared and when.
+model SchedulePublication {
+  id   String @id @default(auto()) @map("_id") @db.ObjectId
+  /// The days as published, in the shape of `snapshotOf` (src/lib/schedule.ts)
+  /// — which is also exactly what the public endpoint returns.
+  days Json
+
+  publishedById   String   @db.ObjectId
+  publishedByName String
+  publishedAt     DateTime @default(now())
+
+  @@index([publishedAt])
+  @@map("schedule_publication")
+}
+
+/// A host's walk-in guests: friends or family a devotee invites to come for
+/// the day — to attend and to eat — without registering or staying. Filled in
+/// by the host on the public /guests/register link (shared only with selected
+/// people), or by the team at the desk.
+///
+/// Counted, not named one by one: the kitchen needs how many plates each day,
+/// not who. Each entry is one host's party; a host with two separate parties
+/// sends the form twice.
+model GuestVisit {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  /// Whose guests they are: the devotee who invited them.
+  hostName   String
+  /// E.164. Not verified: it is how the team reaches the host, nothing more.
+  hostMobile String
+  /// The host's mandal (or "Not in a mandal"). A sanchalak sees their own.
+  hostMandal String
+
+  /// Optional: the guests' names, as the host wrote them.
+  guestNames String?
+  /// The days they come, in date order, one entry per day.
+  days       GuestDay[]
+  notes      String?
+
+  /// "self" from the public link, "staff" from the desk (`createdById`).
+  source      String
+  createdById String? @db.ObjectId
+
+  /// The last change by the team, and who made it.
+  editedAt     DateTime?
+  editedByName String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([hostMandal])
+  @@index([hostMobile])
+  @@index([createdAt])
+  @@map("guest_visit")
+}
+
+/// One day a host's guests come.
+type GuestDay {
+  /// An event day, e.g. "2027-01-29".
+  date   String
+  /// How many people come that day.
+  guests Int
+  /// The meals they take that day: "lunch", "dinner". Empty: they only attend.
+  meals  String[]
+}
+
+/// One saved edit to a registration after it was submitted: who made it, and
+/// the registration's details just before and just after. Written by
+/// `recordChange` (src/lib/registration-changes.ts) on every edit that changed
+/// something — a devotee's own at /register/edit, or the team's at the desk.
+/// Admins read them on the Logs screen (/admin/logs).
+///
+/// The two snapshots are stored whole, in the shape the frontend reads
+/// (`toRegistrationDto`, details only), and compared there — so how a change
+/// is described can improve without touching old entries. The code, name and
+/// mandal are copied in so an entry still reads well if the registration is
+/// later removed.
+model RegistrationChange {
+  id             String @id @default(auto()) @map("_id") @db.ObjectId
+  registrationId String @db.ObjectId
+  code           String
+  /// The family name, else the primary contact's name — after the edit.
+  name           String
+  mandal         String
+
+  /// "devotee" (online, after an OTP on the contact number) or "team" (a
+  /// signed-in staff member, sanchalak or admin at the desk).
+  by       String
+  /// The team member's name; null for the devotee.
+  byName   String?
+  byUserId String? @db.ObjectId
+
+  /// The registration's status when the edit was saved. Edits never change it.
+  status String
+
+  /// The details before and after: `RegistrationDetails` in the frontend.
+  before Json
+  after  Json
+
+  createdAt DateTime @default(now())
+
+  @@index([registrationId])
+  @@index([by])
+  @@index([createdAt])
+  @@map("registration_change")
+}
+
+/// One admin's conversation with the Assistant (/admin/assistant). Private to
+/// that admin. The whole chat is one document, with messages appended in place
+/// (`push`), so opening a chat is one read and a turn writes only what is new.
+///
+/// Deleted 30 days after it was last used, by a TTL index on `updatedAt`
+/// (scripts/ensure-partial-indexes.ts; Prisma cannot express one). The tool
+/// results inside hold devotees' names and numbers, so they do not stay for
+/// ever.
+model AssistantChat {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  userId String @db.ObjectId
+  /// The first question, shortened: how the chat is listed in History.
+  title  String
+
+  /// The conversation as the model reads it, append-only: thinking blocks and
+  /// tool results stay exactly as they were, or the next turn is refused.
+  messages  AssistantMessage[]
+  /// Questions asked, for the History list.
+  questions Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("assistant_chat")
+}
+
+type AssistantMessage {
+  /// "user" | "assistant"
+  role    String
+  /// Anthropic message content: a string, or an array of content blocks.
+  content Json
+  /// Display only, never sent to the model: the card each tool result made,
+  /// keyed by its `tool_use_id` (`Card` in upasana-fe/src/features/assistant/tools.ts).
+  cards   Json?
+  at      DateTime
+}
+
+/// "Recently asked by the team": a card one admin's question produced, for the
+/// others to open with live data and no model call. One entry per recipe —
+/// the same report asked again moves to the top with the latest question.
+/// Deleted 30 days after it was last asked (TTL on `askedAt`).
+model AssistantAsk {
+  id    String @id @default(auto()) @map("_id") @db.ObjectId
+  /// SHA-256 of the card's recipe without its title, so "Train arrivals · 29
+  /// Jan" and "Train arrivals on 29 Jan" are the same entry.
+  key   String @unique
+  /// The question as last asked.
+  question String
+  title    String
+  /// The card's recipe; whoever opens it recomputes it from current data.
+  card     Json
+
+  askedById   String   @db.ObjectId
+  askedByName String
+  askedAt     DateTime
+  timesAsked  Int      @default(1)
+
+  @@map("assistant_ask")
+}
+
+/// One WhatsApp template Meta accepted from us, and what became of it. Written
+/// by `sendWhatsAppTemplate` (src/lib/whatsapp.ts) the moment Meta answers with
+/// a message id; moved along by the delivery webhook
+/// (src/lib/whatsapp-webhook.ts) as Meta reports sent → delivered → read, or
+/// failed. Admins read them on the WhatsApp screen (/admin/whatsapp).
+///
+/// Only accepted sends are here: a send Meta refused on the spot has no
+/// message id to key it by, and its reason is in the server log and in the
+/// response to whoever asked. The template's values are not stored — for a
+/// code they are the code itself.
+model WhatsAppMessage {
+  id          String @id @default(auto()) @map("_id") @db.ObjectId
+  /// Meta's id, "wamid.…". Every row has one, so a plain unique index is safe.
+  waMessageId String @unique
+  /// Country code and number, digits only, as sent.
+  to          String
+  template    String
+  /// The language code the template went out in, after any fallback.
+  language    String
+  /// What it was for, the usage-ledger label: "whatsapp:otp", "whatsapp:admin_invite"…
+  purpose     String
+  /// The registration whose contact this number is, when one matched at send time.
+  registrationId String? @db.ObjectId
+
+  /// "accepted" | "sent" | "delivered" | "read" | "failed". Only ever moves
+  /// forward (`statusRank`): Meta delivers webhooks out of order and twice.
+  status       String  @default("accepted")
+  errorCode    Int?
+  errorMessage String?
+
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  failedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([to])
+  @@index([createdAt])
+  @@map("whatsapp_message")
+}
+
+/// One message a devotee sent to our WhatsApp number. The number lives on
+/// Meta's servers, not on anyone's phone, so this is the only place a reply is
+/// ever seen. Written by the delivery webhook; admins read them on the
+/// WhatsApp screen.
+model WhatsAppInbound {
+  id          String @id @default(auto()) @map("_id") @db.ObjectId
+  /// Meta's id. Unique, which is what makes a redelivered webhook a no-op.
+  waMessageId String @unique
+  /// Country code and number, digits only.
+  from        String
+  /// The sender's WhatsApp profile name, as they set it.
+  profileName String?
+  /// "text", "button", "interactive", "image", "audio", "location"…
+  type        String
+  /// What can be shown as words: the text, a button's label, a caption.
+  text        String?
+  /// The message exactly as Meta sent it.
+  raw         Json
+  /// The registration whose contact is this number, when one matched.
+  registrationId String? @db.ObjectId
+
+  /// When the devotee sent it (Meta's timestamp), not when it reached us.
+  receivedAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([receivedAt])
+  @@index([from])
+  @@map("whatsapp_inbound")
+}
+
+/// One message an admin sent to many devotees at once from Send messages
+/// (/admin/messages): which template, filled how, to whom (the recipients are
+/// `WhatsAppBroadcastRecipient`s), and how far it has got.
+///
+/// Sent by `runBroadcast` (src/lib/broadcasts.ts) inside the API process, one
+/// recipient at a time. A restart picks up every broadcast still "sending"
+/// (`resumeBroadcasts`, called at start-up).
+model WhatsAppBroadcast {
+  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  template String
+  /// The template language code it goes out in, e.g. "en", "gu".
+  language String
+  /// Meta's category when sent: "UTILITY" | "MARKETING". Decides the price.
+  category String
+  /// The template's body as Meta had it, with {{1}}… still in, for showing later.
+  bodyText String
+  /// What fills each {{n}}, in order: `VariableSpec[]` in src/lib/broadcasts.ts.
+  variables Json
+  /// The filters that chose the recipients, as words ("Mandal: Surat · …").
+  summary   String
+
+  /// "sending" | "paused" | "done" | "cancelled". Paused when sending keeps
+  /// failing or the token stops working; an admin resumes it.
+  status      String  @default("sending")
+  pauseReason String?
+
+  /// Recipients, after numbers were checked and duplicates removed.
+  total    Int
+  accepted Int @default(0)
+  failed   Int @default(0)
+  /// People picked but not messaged, by reason: `{ noNumber, duplicate, invalid }`.
+  skipped  Json
+
+  createdById   String    @db.ObjectId
+  createdByName String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  finishedAt    DateTime?
+
+  @@index([createdAt])
+  @@index([status])
+  @@map("whatsapp_broadcast")
+}
+
+/// One number a broadcast goes to. Its own document, so sending one can be
+/// claimed (`pending` → `sending`) and recorded without rewriting the rest.
+/// Delivery after Meta accepted it is on `WhatsAppMessage`, by `waMessageId`.
+model WhatsAppBroadcastRecipient {
+  id          String @id @default(auto()) @map("_id") @db.ObjectId
+  broadcastId String @db.ObjectId
+  /// Send order: the order the people were picked in.
+  order       Int
+  /// Country code and number, digits only.
+  to          String
+  /// Who it is for: the first person picked with this number.
+  name        String
+  registrationId String @db.ObjectId
+  memberId       String
+  /// The values for {{1}}, {{2}}… for this person, as sent.
+  values      String[]
+
+  /// "pending" | "sending" | "accepted" | "failed".
+  status       String  @default("pending")
+  waMessageId  String?
+  errorCode    Int?
+  errorMessage String?
+  sentAt       DateTime?
+
+  @@index([broadcastId, status, order])
+  @@map("whatsapp_broadcast_recipient")
+}

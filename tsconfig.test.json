@@ -1,0 +1,20 @@
+{
+  // The build config plus the tests it deliberately excludes, so `typecheck`
+  // covers the whole tree while `build` still emits only what ships.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Test files use top-level await and `import.meta`-era module semantics;
+    // the build stays on commonjs because that is what `node dist/index.js`
+    // runs.
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "types": ["node", "vitest/globals"]
+  },
+  // Must be restated. `extends` inherits `exclude` from the base config, which
+  // excludes `src/**/*.test.ts` so that `build` does not emit them — and without
+  // this line that exclusion carries over here too, silently making `typecheck`
+  // skip every test file it exists to cover.
+  "exclude": ["node_modules"],
+  "include": ["src/**/*"]
+}
