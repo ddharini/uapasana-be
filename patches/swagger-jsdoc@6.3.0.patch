@@ -1,0 +1,61 @@
+diff --git a/src/specification.js b/src/specification.js
+index 821db8dedcbc099e826150613f759a986bf1e7c7..46fa2f00b85cd6191005b201cfc5c088c98de8e4 100644
+--- a/src/specification.js
++++ b/src/specification.js
+@@ -2,6 +2,19 @@ const doctrine = require('doctrine');
+ const parser = require('@apidevtools/swagger-parser');
+ const YAML = require('yaml');
+ 
++// yaml 2 dropped Document#anchors and cstNode (swagger-jsdoc was written
++// against the 2.0.0-1 pre-release); list a document's anchors by walking it.
++const anchorNames = (doc) => {
++  const names = [];
++  YAML.visit(doc, {
++    Node(_, node) {
++      if (node.anchor) names.push(node.anchor);
++    },
++  });
++  return names;
++};
++
++
+ const {
+   hasEmptyProperty,
+   convertGlobPaths,
+@@ -184,7 +197,6 @@ function organize(swaggerObject, annotation, property) {
+  * @returns {object} swaggerObject
+  */
+ function build(options) {
+-  YAML.defaultOptions.keepCstNodes = true;
+ 
+   // Get input definition and prepare the specification's skeleton
+   const definition = options.swaggerDefinition || options.definition;
+@@ -206,7 +218,7 @@ function build(options) {
+             filePath,
+           });
+ 
+-          const anchors = parsed.anchors.getNames();
++          const anchors = anchorNames(parsed);
+           if (anchors.length) {
+             for (const anchor of anchors) {
+               yamlDocsAnchors.set(anchor, parsed);
+@@ -229,7 +241,7 @@ function build(options) {
+           for (const doc of extractYamlFromJsDoc(jsDocComment)) {
+             const parsed = Object.assign(YAML.parseDocument(doc), { filePath });
+ 
+-            const anchors = parsed.anchors.getNames();
++            const anchors = anchorNames(parsed);
+             if (anchors.length) {
+               for (const anchor of anchors) {
+                 yamlDocsAnchors.set(anchor, parsed);
+@@ -267,8 +279,8 @@ function build(options) {
+             .join('')
+             .split(' at line')[0];
+           const anchor = yamlDocsAnchors.get(refErr);
+-          const anchorString = anchor.cstNode.toString();
+-          const originalString = docWithErr.cstNode.toString();
++          const anchorString = anchor.toString();
++          const originalString = docWithErr.toString();
+           const readyDocument = YAML.parseDocument(
+             `${anchorString}\n${originalString}`
+           );

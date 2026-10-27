@@ -59,7 +59,11 @@ app.use("/api/admin/assistant", express.json({ limit: "2mb" }));
 app.use(express.json());
 
 app.use("/api", router);
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+// Development only: the docs list every route, admin ones included, and a
+// public map of the API is a gift to anyone probing it.
+if (process.env.NODE_ENV !== "production") {
+  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+}
 
 app.use(errorHandler as unknown as express.ErrorRequestHandler);
 

@@ -323,7 +323,7 @@ export const newRegistrationSchema = z
           issue([...path, "arrival", "date"], "Pick an arrival day between 28 January and 1 February");
         }
         if (!DEPARTURE_DAYS.includes(departure.date)) {
-          issue([...path, "departure", "date"], "Pick a departure day between 28 January and 1 February");
+          issue([...path, "departure", "date"], "Pick a departure day between 28 January and 2 February");
         }
       }
     }

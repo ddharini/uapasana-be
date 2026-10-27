@@ -666,6 +666,12 @@ model SchedulePublication {
   /// The days as published, in the shape of `snapshotOf` (src/lib/schedule.ts)
   /// — which is also exactly what the public endpoint returns.
   days Json
+  /// Gujarati for the admins' own words in `days` — themes, titles, places,
+  /// notes — as `{ english: gujarati }`, translated by Claude on publish
+  /// (src/lib/scheduleTranslation.ts). A map beside `days`, not fields inside
+  /// it, so "unpublished changes" still compares the English alone. Missing on
+  /// publications from before it existed; any text not in it shows in English.
+  gu Json?
 
   publishedById   String   @db.ObjectId
   publishedByName String

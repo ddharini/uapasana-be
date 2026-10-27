@@ -11,7 +11,7 @@ import { EVENT_DAYS, MANDALS, MOBILE_E164, NO_MANDAL } from "./event";
 /** Meals a day guest can take. Breakfast is not served to day guests. */
 export const GUEST_MEALS = ["lunch", "dinner"] as const;
 
-/** Most people one entry can bring on a day. A bigger party is a call to the team. */
+/** Most people one entry can bring on a day. A bigger group is a call to the team. */
 export const MAX_GUESTS_PER_DAY = 50;
 
 /**
@@ -36,7 +36,7 @@ const guestDay = z.object({
     .number({ error: "Enter how many are coming" })
     .int("Enter a whole number")
     .min(1, "At least 1")
-    .max(MAX_GUESTS_PER_DAY, `At most ${MAX_GUESTS_PER_DAY} — call the team for a bigger party`),
+    .max(MAX_GUESTS_PER_DAY, `At most ${MAX_GUESTS_PER_DAY} — call the team for a bigger group`),
   meals: z
     .array(z.enum(GUEST_MEALS, { error: "Pick lunch or dinner" }))
     .transform(meals => GUEST_MEALS.filter(m => meals.includes(m))),

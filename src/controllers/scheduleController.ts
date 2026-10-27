@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { Request, Response } from "express";
 
+import { isAiConfigured } from "../lib/ai/claude";
 import { daySchema, sessionSchema, snapshotOf, toDayDto } from "../lib/schedule";
+import { translateSchedule, translationsOf, untranslated } from "../lib/scheduleTranslation";
 import { prisma } from "../utils/db";
 
 /**
@@ -58,8 +60,14 @@ async function draftState() {
     prisma.scheduleDay.findMany({ orderBy: { date: "asc" } }),
     latestPublication(),
   ]);
+  const snapshot = snapshotOf(days);
+  // Gujarati still to be made counts as a change: Publish is how it gets made,
+  // and the button is off when nothing has changed — so a programme published
+  // before translation existed, or one whose translation failed, would
+  // otherwise stay English with no way to fix it. Only when it can be made.
   const unpublishedChanges = latest
-    ? JSON.stringify(snapshotOf(days)) !== JSON.stringify(latest.days)
+    ? JSON.stringify(snapshot) !== JSON.stringify(latest.days) ||
+      (isAiConfigured() && untranslated(snapshot, translationsOf(latest)).length > 0)
     : days.length > 0;
   return {
     days: days.map(toDayDto),
@@ -75,12 +83,22 @@ const list = async (_req: Request, res: Response): Promise<void> => {
   res.status(200).json({ success: true, data: await draftState() });
 };
 
-/** Copies the draft, as it is right now, to what devotees see. */
+/**
+ * Copies the draft, as it is right now, to what devotees see — with Gujarati
+ * for its titles, places, notes and themes, translated here so a devotee's
+ * page load never waits on a model. Takes a few seconds when there is new text.
+ */
 const publish = async (req: Request, res: Response): Promise<void> => {
-  const days = await prisma.scheduleDay.findMany({ orderBy: { date: "asc" } });
+  const [days, latest] = await Promise.all([
+    prisma.scheduleDay.findMany({ orderBy: { date: "asc" } }),
+    latestPublication(),
+  ]);
+  const snapshot = snapshotOf(days);
+  const gu = await translateSchedule(snapshot, translationsOf(latest), req.user.id);
   await prisma.schedulePublication.create({
     data: {
-      days: snapshotOf(days),
+      days: snapshot,
+      gu,
       publishedById: req.user.id,
       publishedByName: req.user.name,
     },
@@ -101,7 +119,11 @@ const published = async (_req: Request, res: Response): Promise<void> => {
   res.set("Cache-Control", "public, max-age=30");
   res.status(200).json({
     success: true,
-    data: { days: latest?.days ?? [], publishedAt: latest?.publishedAt ?? null },
+    data: {
+      days: latest?.days ?? [],
+      gu: translationsOf(latest),
+      publishedAt: latest?.publishedAt ?? null,
+    },
   });
 };
 

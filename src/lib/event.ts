@@ -25,10 +25,15 @@ export const EVENT_DAYS = ["2027-01-29", "2027-01-30", "2027-01-31", "2027-02-01
 
 /** Days a guest may arrive: the day before the event, and the event days. Mirrors the frontend. */
 export const ARRIVAL_DATES = ["2027-01-28", ...EVENT_DAYS] as const;
-/** Days a guest may leave: the same as arriving, the day before included. Mirrors the frontend. */
-export const DEPARTURE_DATES = ARRIVAL_DATES;
-/** Every day a guest can be here, first to last. */
-export const STAY_DATES = ARRIVAL_DATES;
+/**
+ * Days a guest may leave: the day before through the day after. The day after
+ * is for those who stay the last evening and travel home the next morning —
+ * leaving the same night is often not possible from further away. Mirrors the
+ * frontend.
+ */
+export const DEPARTURE_DATES = [...ARRIVAL_DATES, "2027-02-02"] as const;
+/** Every day a guest can be here, first to last: the day before to the day after. */
+export const STAY_DATES = DEPARTURE_DATES;
 
 /** "2027-01-01" … "2027-02-28": every calendar day from `first` to `last`. */
 function daysBetween(first: string, last: string) {

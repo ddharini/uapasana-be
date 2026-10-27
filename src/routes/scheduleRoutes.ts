@@ -31,11 +31,14 @@ const {
  * /schedule/published:
  *   get:
  *     summary: The published programme, for devotees
- *     description: Public. Never the draft. Empty `days` until the first publish.
+ *     description: >
+ *       Public. Never the draft. Empty `days` until the first publish. `gu` maps
+ *       each theme, title, place and note in `days` to its Gujarati, made on
+ *       publish; a text missing from it is shown in English.
  *     tags: [Schedule]
  *     responses:
  *       200:
- *         description: "`{ days, publishedAt }`"
+ *         description: "`{ days, gu, publishedAt }`"
  */
 scheduleRouter.get("/published", published);
 
@@ -59,6 +62,10 @@ scheduleRouter.get("/", list);
  * /schedule/publish:
  *   post:
  *     summary: Publish the draft to devotees
+ *     description: >
+ *       Also translates any theme, title, place or note not translated before
+ *       into Gujarati (Claude, a few seconds). If that fails the publish still
+ *       goes out, and the untranslated text shows in English.
  *     tags: [Schedule]
  *     responses:
  *       201:

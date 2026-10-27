@@ -286,7 +286,20 @@ describe("arriving early for seva", () => {
       "Pick an arrival day between 28 January and 1 February",
     ]);
     expect(messagesAt(alone(), "members.0.departure.date")).toEqual([
-      "Pick a departure day between 28 January and 1 February",
+      "Pick a departure day between 28 January and 2 February",
+    ]);
+  });
+
+  it("lets anyone leave the day after the event, but not arrive on it", () => {
+    const lastDay = { date: "2027-02-01", slot: "morning", meal: true };
+    const dayAfter = { date: "2027-02-02", slot: "morning", meal: true };
+    const staying = (arrival: object, departure: object) =>
+      registration({ members: [contact({ arrival, departure })], arrival, departure });
+    const leaving = staying(lastDay, dayAfter);
+    expect(messagesAt(leaving, "departure.date")).toEqual([]);
+    expect(messagesAt(leaving, "members.0.departure.date")).toEqual([]);
+    expect(messagesAt(staying(dayAfter, dayAfter), "arrival.date")).toEqual([
+      "Pick an arrival day between 28 January and 1 February",
     ]);
   });
 
