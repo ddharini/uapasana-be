@@ -257,6 +257,93 @@ describe("travelling separately", () => {
   });
 });
 
+/**
+ * A drop to the station, bus stand or airport is its own question: someone who
+ * makes their own way here may still need taking back. It used to be offered
+ * only with a pickup, and the server threw it away without one.
+ */
+describe("a drop without a pickup", () => {
+  const flightHome = {
+    departureMode: "flight",
+    departureReference: "6E 2132",
+    departureTime: "18:45",
+  };
+
+  it("is kept, with the journey home", () => {
+    const data = toCreateData(
+      newRegistrationSchema.parse(
+        registration({
+          travel: { mode: "train", needsPickup: false, needsDrop: true, ...flightHome },
+        })
+      )
+    );
+    expect(data.travel).toMatchObject({
+      needsPickup: false,
+      needsDrop: true,
+      departureMode: "flight",
+      departureReference: "6E 2132",
+      departureTime: "18:45",
+      arrivalTime: null,
+    });
+  });
+
+  it("still needs to know how they leave, and the journey's details", () => {
+    const noMode = registration({ travel: { mode: "train", needsPickup: false, needsDrop: true } });
+    expect(messagesAt(noMode, "travel.departureMode")).toEqual(["Select how you are leaving"]);
+    const noFlight = registration({
+      travel: { mode: "public_bus", needsPickup: false, needsDrop: true, departureMode: "flight" },
+    });
+    expect(messagesAt(noFlight, "travel.departureReference")).toEqual(["Enter the flight number"]);
+  });
+
+  it("is kept on one person when the party travels separately", () => {
+    const data = toCreateData(
+      newRegistrationSchema.parse(
+        registration({
+          type: "family",
+          groupName: "Patel family",
+          members: [
+            person("Brij Patel", {
+              isPrimary: true,
+              mobile: "+919876543210",
+              travel: { mode: "personal_vehicle", needsPickup: false },
+            }),
+            person("Arpita Patel", {
+              gender: "female",
+              age: 38,
+              travel: { mode: "flight", needsPickup: false, needsDrop: true, ...flightHome },
+            }),
+          ],
+          travel: { mode: "separate", needsPickup: false, vehicleCount: 1 },
+        })
+      )
+    );
+    expect(data.travel).toMatchObject({ needsPickup: false, needsDrop: true });
+    expect(data.members[1].travel).toMatchObject({
+      needsPickup: false,
+      needsDrop: true,
+      departureMode: "flight",
+    });
+  });
+
+  it("is not kept for someone coming by their own vehicle", () => {
+    const data = toCreateData(
+      newRegistrationSchema.parse(
+        registration({
+          travel: {
+            mode: "personal_vehicle",
+            needsPickup: false,
+            needsDrop: true,
+            vehicleCount: 1,
+            ...flightHome,
+          },
+        })
+      )
+    );
+    expect(data.travel).toMatchObject({ needsDrop: false, departureMode: null });
+  });
+});
+
 describe("arriving early for seva", () => {
   const early = { date: "2027-01-10", slot: "morning", meal: true };
   const late = { date: "2027-02-20", slot: "evening", meal: true };

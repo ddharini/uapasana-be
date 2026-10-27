@@ -414,7 +414,9 @@ function checkJourney(
   issue: (path: (string | number)[], message: string) => void
 ) {
   if (!isJourneyMode(t.mode)) return;
-  if (t.needsPickup && t.needsDrop && !t.departureMode) {
+  // A drop stands on its own: someone may make their own way here and still
+  // need taking to the station, bus stand or airport when they leave.
+  if (t.needsDrop && !t.departureMode) {
     issue([...path, "departureMode"], "Select how you are leaving");
   }
   const legs = [
@@ -426,7 +428,7 @@ function checkJourney(
       time: "arrivalTime",
     },
     {
-      wanted: t.needsPickup && t.needsDrop && !!t.departureMode,
+      wanted: t.needsDrop && !!t.departureMode,
       mode: t.departureMode,
       reference: "departureReference",
       station: "departureStation",
@@ -584,7 +586,8 @@ export function toCreateData(input: NewRegistrationInput, existingIds: readonly 
 
 /**
  * A journey as stored: the arrival time and station only where they apply, a
- * pickup only by train, bus or flight, and a drop only with a pickup.
+ * pickup or a drop only by train, bus or flight. The two are independent: a
+ * drop no longer needs a pickup.
  */
 function journeyRecord(travel: Omit<Journey, "mode"> & { mode: string }) {
   const pickup = isJourneyMode(travel.mode) && travel.needsPickup;
@@ -594,7 +597,7 @@ function journeyRecord(travel: Omit<Journey, "mode"> & { mode: string }) {
     arrivalTime: (isJourneyMode(travel.mode) && travel.arrivalTime) || null,
     station: (travel.mode === "train" && travel.station) || null,
     needsPickup: pickup,
-    needsDrop: pickup && travel.needsDrop,
+    needsDrop: isJourneyMode(travel.mode) && travel.needsDrop,
     ...journeyHome(travel),
   };
 }
@@ -604,8 +607,7 @@ function journeyRecord(travel: Omit<Journey, "mode"> & { mode: string }) {
  * only when leaving by train.
  */
 function journeyHome(travel: Omit<Journey, "mode"> & { mode: string }) {
-  const kept =
-    isJourneyMode(travel.mode) && travel.needsPickup && travel.needsDrop && !!travel.departureMode;
+  const kept = isJourneyMode(travel.mode) && travel.needsDrop && !!travel.departureMode;
   return {
     departureMode: (kept && travel.departureMode) || null,
     departureReference: (kept && travel.departureReference) || null,
