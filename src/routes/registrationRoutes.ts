@@ -5,7 +5,8 @@ import { optionalSession, protect, requireReviewer, requireStaff } from "../midd
 
 export const registrationRouter = express.Router();
 
-const { create, list, getOne, lookup, taken, setStatus, update, mine, updateSelf } = registrationController;
+const { create, list, getOne, lookup, taken, setStatus, update, mine, updateSelf, pdf } =
+  registrationController;
 
 /**
  * @openapi
@@ -90,6 +91,31 @@ registrationRouter.patch("/:id/self", updateSelf);
  *         description: VALIDATION_ERROR — not a mobile number with country code
  */
 registrationRouter.get("/taken", taken);
+
+/**
+ * @openapi
+ * /registrations/pdf/{token}:
+ *   get:
+ *     summary: A registration as a PDF, from the link in its WhatsApp confirmation
+ *     description: >
+ *       Public. The token is the registration's id and a signature of it
+ *       (`<id>-<signature>`, optionally ending ".pdf"), so it opens only the
+ *       registration it was made for. Rendered on every request.
+ *     tags: [Registrations]
+ *     parameters:
+ *       - in: path
+ *         name: token
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: The PDF
+ *         content:
+ *           application/pdf: {}
+ *       404:
+ *         description: NOT_FOUND — not a token this server signed, or the registration is gone
+ */
+registrationRouter.get("/pdf/:token", pdf);
 
 // Everything below holds devotees' personal details: the desk only, and a
 // sanchalak only for their mandal.

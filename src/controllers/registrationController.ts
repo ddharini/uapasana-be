@@ -10,6 +10,7 @@ import { MOBILE_OTP_REQUIRED, consumeVerificationToken, peekVerificationToken } 
 import { takeNumbers, withCodes } from "../lib/registration-codes";
 import { recordChange } from "../lib/registration-changes";
 import { confirmationLang, sendRegistrationConfirmation } from "../lib/registration-confirmation";
+import { idFromPdfToken, registrationPdf } from "../lib/registration-pdf";
 import {
   newRegistrationSchema,
   statusSchema,
@@ -406,4 +407,39 @@ const updateSelf = async (req: Request, res: Response): Promise<void> => {
   res.status(200).json({ success: true, data: toRegistrationDto(registration) });
 };
 
-export const registrationController = { create, list, getOne, lookup, taken, setStatus, update, mine, updateSelf };
+/**
+ * Public: the registration as a PDF, from the signed link in the WhatsApp
+ * confirmation. Rendered now, so it shows the latest details after an edit.
+ * A token not signed here, or for a registration that is gone, is a 404 —
+ * the same answer either way, so the link reveals nothing about which ids exist.
+ */
+const pdf = async (req: Request, res: Response): Promise<void> => {
+  const id = idFromPdfToken(String(req.params.token));
+  const registration = id ? await prisma.registration.findUnique({ where: { id } }) : null;
+  if (!registration) return void notFound(res);
+
+  const file = await registrationPdf(registration);
+  res
+    .status(200)
+    .set({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `inline; filename="${registration.code}.pdf"`,
+      // Names, ages and a phone number: never kept by a proxy or indexed.
+      "Cache-Control": "private, no-store",
+      "X-Robots-Tag": "noindex",
+    })
+    .send(file);
+};
+
+export const registrationController = {
+  create,
+  list,
+  getOne,
+  lookup,
+  taken,
+  setStatus,
+  update,
+  mine,
+  updateSelf,
+  pdf,
+};

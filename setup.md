@@ -165,6 +165,17 @@ registration is saved, in the language the form was shown in:
 The four values must stay in that order — `confirmationValues` in `src/lib/registration-confirmation.ts`
 fills them. Every local registration against a configured `.env` sends one, and it is paid.
 
+**The PDF link in `{{4}}`** (2026-10-27). After the stay, `{{4}}` carries
+`. Everyone's details: <link>` (gu: `. બધાની વિગતો: <link>`) — the registration as a PDF
+(`src/lib/registration-pdf.ts`: every person's number, name, gender and age, relation, arrival,
+departure and bed, then travel). No template change was needed: a link is just text in the value,
+and WhatsApp makes it tappable. The link is `<BETTER_AUTH_URL>/api/registrations/pdf/<id>-<signature>.pdf`,
+signed with `BETTER_AUTH_SECRET`, so it opens that registration only, needs no sign-in, never
+expires, and is rendered on every open — after an edit the same link shows the new details. Without
+both of those settings the value is the stay alone. **Changing `BETTER_AUTH_SECRET` breaks every link
+already sent.** The PDF is English in both languages: Helvetica has no Gujarati, and names are
+English letters only anyway.
+
 *Room details* (`room_details`) belongs to the paused per-person allotment; what the stay message
 says is still to be decided, so do not create it yet.
 

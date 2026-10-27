@@ -1,5 +1,6 @@
 import type { Registration } from "@prisma/client";
 
+import { registrationPdfUrl } from "./registration-pdf";
 import {
   WHATSAPP_TEMPLATES,
   WHATSAPP_LANGS,
@@ -21,7 +22,18 @@ import {
  *
  * The template's wording lives on Meta (`registration_confirmation`, Utility,
  * en + gu); setup.md has it. Only the four values travel from here.
+ *
+ * `{{4}}` also carries the link to the registration's PDF (registration-pdf.ts)
+ * — everyone on it, their days, beds and travel — after the stay. A link in a
+ * value needs no change to the approved template, and WhatsApp makes it
+ * tappable.
  */
+
+/** The words before the PDF link, in each language the template is approved in. */
+const DETAILS_WORDS: Record<WhatsAppLang, string> = {
+  en: "Everyone's details",
+  gu: "બધાની વિગતો",
+};
 
 /** The slot words in each language the template is approved in. */
 const SLOT_WORDS: Record<WhatsAppLang, Record<string, string>> = {
@@ -44,18 +56,21 @@ function formatStayPoint(point: { date: string; slot: string }, lang: WhatsAppLa
 /**
  * The template's `{{1}}`…`{{4}}`, in order: the contact's first name, the
  * registration's code (a family's `DM-F-…`, an individual's own), how many
- * people it covers, and its stay from the first person in to the last out.
+ * people it covers, and its stay from the first person in to the last out,
+ * then the PDF link when the server can sign one.
  */
 export function confirmationValues(
-  registration: Pick<Registration, "code" | "members" | "arrival" | "departure">,
+  registration: Pick<Registration, "id" | "code" | "members" | "arrival" | "departure">,
   lang: WhatsAppLang
 ): string[] {
   const contact = registration.members.find(m => m.isPrimary) ?? registration.members[0];
+  const stay = `${formatStayPoint(registration.arrival, lang)} – ${formatStayPoint(registration.departure, lang)}`;
+  const link = registrationPdfUrl(registration.id);
   return [
     contact?.firstName?.trim() || contact?.fullName.split(" ")[0] || "",
     registration.code,
     String(registration.members.length),
-    `${formatStayPoint(registration.arrival, lang)} – ${formatStayPoint(registration.departure, lang)}`,
+    link ? `${stay}. ${DETAILS_WORDS[lang]}: ${link}` : stay,
   ];
 }
 

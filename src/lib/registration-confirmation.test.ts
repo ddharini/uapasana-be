@@ -26,10 +26,14 @@ const member = (extra: object) => ({
 });
 
 const registration = {
+  id: "65f1a2b3c4d5e6f7a8b9c0d1",
   code: "DM-F-0031",
   contactMobile: "+919876543210",
   isSample: false,
-  members: [member({}), member({ id: "m2", fullName: "Riya Patel", firstName: "Riya", isPrimary: false })],
+  members: [
+    member({}),
+    member({ id: "m2", fullName: "Riya Patel", firstName: "Riya", isPrimary: false }),
+  ],
   arrival: { date: "2027-01-30", slot: "morning" },
   departure: { date: "2027-02-01", slot: "evening" },
 } as unknown as Registration;
@@ -44,12 +48,30 @@ describe("confirmationValues", () => {
     ]);
   });
 
+  it("adds the link to everyone's details after the stay, in the form's language", () => {
+    vi.stubEnv("BETTER_AUTH_SECRET", "secret");
+    vi.stubEnv("BETTER_AUTH_URL", "https://api.example.org/");
+    const link =
+      /https:\/\/api\.example\.org\/api\/registrations\/pdf\/65f1a2b3c4d5e6f7a8b9c0d1-[0-9a-f]{32}\.pdf$/;
+    const [en, gu] = [
+      confirmationValues(registration, "en")[3],
+      confirmationValues(registration, "gu")[3],
+    ];
+    expect(en).toMatch(/^30 Jan, morning – 1 Feb, evening\. Everyone's details: /);
+    expect(en).toMatch(link);
+    expect(gu).toMatch(/^30 જાન્યુ, સવાર – 1 ફેબ્રુ, સાંજ\. બધાની વિગતો: /);
+    vi.unstubAllEnvs();
+  });
+
   it("writes the stay in Gujarati for a Gujarati form", () => {
     expect(confirmationValues(registration, "gu")[3]).toBe("30 જાન્યુ, સવાર – 1 ફેબ્રુ, સાંજ");
   });
 
   it("falls back to the full name's first word on older rows without firstName", () => {
-    const old = { ...registration, members: [member({ firstName: null })] } as unknown as Registration;
+    const old = {
+      ...registration,
+      members: [member({ firstName: null })],
+    } as unknown as Registration;
     expect(confirmationValues(old, "en")[0]).toBe("Harit");
   });
 });
@@ -77,7 +99,11 @@ describe("sendRegistrationConfirmation", () => {
 
   it("sends the template to the contact with the four values", async () => {
     configure();
-    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ messages: [{ id: "wamid.X" }] }) });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ messages: [{ id: "wamid.X" }] }),
+    });
     await sendRegistrationConfirmation(registration, "gu");
     const payload = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(payload.to).toBe("919876543210");
@@ -89,7 +115,11 @@ describe("sendRegistrationConfirmation", () => {
   it("never throws when Meta refuses", async () => {
     configure();
     vi.spyOn(console, "error").mockImplementation(() => {});
-    fetchMock.mockResolvedValue({ ok: false, status: 400, json: async () => ({ error: { code: 132000, message: "x" } }) });
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ error: { code: 132000, message: "x" } }),
+    });
     await expect(sendRegistrationConfirmation(registration, "en")).resolves.toBeUndefined();
   });
 
