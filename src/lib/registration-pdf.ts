@@ -155,9 +155,14 @@ const MARGIN = 40;
 const INK = "#1f2937";
 const MUTED = "#6b7280";
 const RULE = "#d1d5db";
-/** Code, name, gender and age, relation, arrives, leaves, bed — 515pt, A4 less the margins. */
-const COLUMNS = [62, 138, 62, 62, 75, 75, 41];
-const HEADINGS = ["No.", "Name", "Gender, age", "Relation", "Arrives", "Leaves", "Bed"];
+/**
+ * Code, name, gender and age, relation, arrives, leaves, accommodation — 515pt,
+ * A4 less the margins. Each fits its widest likely text in 9pt Helvetica plus
+ * the cell's 6pt padding ("Accommodation" 71, "28 Jan, afternoon" 70,
+ * "Grandmother" 53); the name takes what is left and wraps.
+ */
+const COLUMNS = [50, 113, 58, 60, 78, 78, 78];
+const HEADINGS = ["No.", "Name", "Gender, age", "Relation", "Arrives", "Leaves", "Accommodation"];
 
 /** Renders the registration. Resolves to the PDF's bytes. */
 export function registrationPdf(registration: Registration): Promise<Buffer> {
@@ -280,8 +285,8 @@ export function registrationPdf(registration: Registration): Promise<Buffer> {
     .fontSize(9)
     .fillColor(MUTED)
     .text(
-      "Please show this at the registration desk when you arrive. To change any details, open " +
-        'the registration link again and choose "Change my registration". The link in your ' +
+      "Please show this at the registration desk when you arrive. To update any details, open " +
+        'the registration link again and choose "Update my registration". The link in your ' +
         "WhatsApp message always opens your latest details.",
       MARGIN,
       doc.y,
