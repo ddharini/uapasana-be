@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import PDFDocument from "pdfkit";
 import type { Registration } from "@prisma/client";
 
-import { EVENT_NAME, formatDay, statusOf } from "./event";
+import { EVENT_NAME, OVERSEAS_MANDALS, formatDay, statusOf } from "./event";
 import { wantsBed } from "./registrations";
 
 /**
@@ -110,6 +110,36 @@ export function travelSection(registration: Pick<Registration, "travel" | "membe
     const own = m.travel ? travelLines(m.travel).join("; ") : "Not given";
     return `${m.fullName}: ${own}`;
   });
+}
+
+type IndiaTravel = NonNullable<Registration["indiaTravel"]>;
+
+/** "25 Jan, 06:30 - AI171": a flight into or out of Ahmedabad, as much as was given. */
+export const formatFlight = (flight: NonNullable<IndiaTravel["arrival"]>) =>
+  [[formatDay(flight.date), flight.time].filter(Boolean).join(", "), flight.flight]
+    .filter(Boolean)
+    .join(" - ");
+
+/**
+ * The travel to India section, for an overseas mandal: the party's Ahmedabad
+ * airport flights, or each person's when they do not all land and fly out on
+ * the same days (then they are on the members, as `airportFlights` reads them
+ * on the frontend). The labels are the registration page's. Empty when no
+ * flights were given at all.
+ */
+export function indiaTravelSection(
+  registration: Pick<Registration, "indiaTravel" | "members">
+): { who?: string; lines: string[] }[] {
+  const lines = (india: IndiaTravel) => [
+    `Pickup when landing: ${india.arrival ? formatFlight(india.arrival) : "Not needed"}`,
+    `Flight out: ${india.departure ? formatFlight(india.departure) : "Not given"}`,
+  ];
+  if (!registration.members.some(m => m.indiaTravel)) {
+    return registration.indiaTravel ? [{ lines: lines(registration.indiaTravel) }] : [];
+  }
+  return registration.members.flatMap(m =>
+    m.indiaTravel ? [{ who: m.fullName, lines: lines(m.indiaTravel) }] : []
+  );
 }
 
 /** "27 Oct 2026", in India's time zone: the date the devotee saw it happen. */
@@ -223,9 +253,24 @@ export function registrationPdf(registration: Registration): Promise<Buffer> {
   drawRow(HEADINGS, true);
   for (const member of registration.members) drawRow(personRow(registration, member), false);
 
-  heading("Travel");
-  doc.font("Helvetica").fontSize(10).fillColor(INK);
-  for (const line of travelSection(registration)) doc.text(text(line), MARGIN, doc.y, { width });
+  // From abroad, getting to India and getting to the Mahotsav are two
+  // journeys, and the transport team plans them separately.
+  const body = (line: string) =>
+    doc.font("Helvetica").fontSize(10).fillColor(INK).text(text(line), MARGIN, doc.y, { width });
+  if (OVERSEAS_MANDALS.includes(registration.mandal)) {
+    heading("Travel plan to India");
+    const india = indiaTravelSection(registration);
+    if (india.length === 0) body("Not given");
+    india.forEach(({ who, lines }, index) => {
+      if (who) {
+        if (index > 0) doc.moveDown(0.4);
+        doc.font("Helvetica-Bold").fontSize(10).fillColor(INK).text(text(who), MARGIN, doc.y);
+      }
+      lines.forEach(body);
+    });
+  }
+  heading("Mahotsav travel plan");
+  travelSection(registration).forEach(body);
 
   // What to do with it.
   doc.moveDown(1.5);

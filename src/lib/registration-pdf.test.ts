@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Registration } from "@prisma/client";
 
 import {
+  formatFlight,
   idFromPdfToken,
+  indiaTravelSection,
   pdfText,
   pdfToken,
   personRow,
@@ -199,5 +201,53 @@ describe("the signed link", () => {
     vi.stubEnv("BETTER_AUTH_SECRET", "replace-me");
     vi.stubEnv("BETTER_AUTH_URL", "https://api.example.org");
     expect(registrationPdfUrl(id)).toBeNull();
+  });
+});
+
+describe("indiaTravelSection", () => {
+  const flights = {
+    needsPickup: true,
+    arrival: { date: "2027-01-25", time: "06:30", flight: "AI171" },
+    needsDrop: false,
+    departure: { date: "2027-02-03", time: null, flight: null },
+  };
+
+  it("formats a flight with whatever was given", () => {
+    expect(formatFlight(flights.arrival)).toBe("25 Jan, 06:30 - AI171");
+    expect(formatFlight(flights.departure)).toBe("3 Feb");
+  });
+
+  it("gives the party's flights", () => {
+    const party = { indiaTravel: flights, members: [member()] } as unknown as Registration;
+    expect(indiaTravelSection(party)).toEqual([
+      { lines: ["Pickup when landing: 25 Jan, 06:30 - AI171", "Flight out: 3 Feb"] },
+    ]);
+  });
+
+  it("gives each person's when they fly on different days", () => {
+    const split = {
+      indiaTravel: { needsPickup: true, arrival: null, needsDrop: false, departure: null },
+      members: [
+        member({ indiaTravel: flights }),
+        member({
+          fullName: "Riya Patel",
+          indiaTravel: { needsPickup: false, arrival: null, needsDrop: false, departure: null },
+        }),
+        member({ fullName: "Mehul Patel", indiaTravel: null }),
+      ],
+    } as unknown as Registration;
+    expect(indiaTravelSection(split)).toEqual([
+      {
+        who: "Harit Patel",
+        lines: ["Pickup when landing: 25 Jan, 06:30 - AI171", "Flight out: 3 Feb"],
+      },
+      { who: "Riya Patel", lines: ["Pickup when landing: Not needed", "Flight out: Not given"] },
+    ]);
+  });
+
+  it("is empty when no flights were given", () => {
+    expect(
+      indiaTravelSection({ indiaTravel: null, members: [member()] } as unknown as Registration)
+    ).toEqual([]);
   });
 });
