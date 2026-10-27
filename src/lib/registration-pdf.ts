@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import PDFDocument from "pdfkit";
 import type { Registration } from "@prisma/client";
 
-import { EVENT_NAME, OVERSEAS_MANDALS, formatDay, statusOf } from "./event";
+import { EVENT_NAME, OVERSEAS_MANDALS, formatDay, isJourneyMode, statusOf } from "./event";
 import { wantsBed } from "./registrations";
 
 /**
@@ -74,9 +74,20 @@ export function personRow(registration: Pick<Registration, "accommodationRequire
   ];
 }
 
-/** How one journey reads: the mode, then whatever was given for it. */
+/**
+ * "Kalupur, 08:30 - 12009 Shatabdi Exp": when and where first, then the train,
+ * bus or flight — as much as was given, in the order `formatFlight` uses.
+ */
+const formatJourney = (where: string | null, time: string | null, what: string | null) =>
+  [[where, time].filter(Boolean).join(", "), what].filter(Boolean).join(" - ");
+
+/**
+ * How one journey reads, label by label, laid out as the travel to India
+ * section is: the mode, the vehicles, then by train, bus or flight the pickup
+ * and the drop, each "Not needed" when not asked for. The two are independent.
+ */
 export function travelLines(travel: Travel): string[] {
-  const lines = [TRAVEL_LABELS[travel.mode] ?? travel.mode];
+  const lines = [`Travelling by: ${TRAVEL_LABELS[travel.mode] ?? travel.mode}`];
   if (travel.mode === "personal_vehicle") {
     const plates = travel.vehicleNumbers.filter(Boolean);
     const count = travel.vehicleCount ?? plates.length;
@@ -84,32 +95,45 @@ export function travelLines(travel: Travel): string[] {
       lines.push(`Vehicles: ${count}${plates.length ? ` (${plates.join(", ")})` : ""}`);
     }
   }
-  const arriving = [
-    travel.reference,
-    travel.station && `to ${travel.station}`,
-    travel.arrivalTime && `at ${travel.arrivalTime}`,
-  ].filter(Boolean);
-  if (arriving.length) lines.push(`Arriving: ${arriving.join(" ")}`);
-  if (travel.needsPickup) lines.push("Pickup in Ahmedabad: Yes");
-  if (travel.needsDrop) {
-    const leaving = [
-      travel.departureMode && TRAVEL_LABELS[travel.departureMode],
-      travel.departureReference,
-      travel.departureStation && `from ${travel.departureStation}`,
-      travel.departureTime && `at ${travel.departureTime}`,
-    ].filter(Boolean);
-    lines.push(`Drop when leaving: Yes${leaving.length ? ` - ${leaving.join(" ")}` : ""}`);
+  if (isJourneyMode(travel.mode)) {
+    const pickup = formatJourney(travel.station, travel.arrivalTime, travel.reference);
+    lines.push(`Pickup in Ahmedabad: ${travel.needsPickup ? pickup || "Yes" : "Not needed"}`);
+    const leavingBy = travel.departureMode && TRAVEL_LABELS[travel.departureMode];
+    const drop = formatJourney(
+      travel.departureStation,
+      travel.departureTime,
+      [leavingBy, travel.departureReference].filter(Boolean).join(" ") || null
+    );
+    lines.push(`Drop when leaving: ${travel.needsDrop ? drop || "Yes" : "Not needed"}`);
+  } else if (travel.reference) {
+    lines.push(`Details: ${travel.reference}`);
   }
   return lines;
 }
 
-/** The travel section: the party's, or each person's when they travel separately. */
-export function travelSection(registration: Pick<Registration, "travel" | "members">): string[] {
-  if (registration.travel.mode !== "separate") return travelLines(registration.travel);
-  return registration.members.map(m => {
-    const own = m.travel ? travelLines(m.travel).join("; ") : "Not given";
-    return `${m.fullName}: ${own}`;
-  });
+/**
+ * The Mahotsav travel section, in the travel to India section's shape: the
+ * party's, or each person's under their name when they travel separately,
+ * with the party's vehicles after them (vehicles are the party's, not a
+ * person's).
+ */
+export function travelSection(
+  registration: Pick<Registration, "travel" | "members">
+): { who?: string; lines: string[] }[] {
+  const { travel } = registration;
+  if (travel.mode !== "separate") return [{ lines: travelLines(travel) }];
+  const people = registration.members.map(m => ({
+    who: m.fullName,
+    lines: m.travel ? travelLines(m.travel) : ["Travelling by: Not given"],
+  }));
+  const plates = travel.vehicleNumbers.filter(Boolean);
+  const count = travel.vehicleCount ?? plates.length;
+  return count > 0
+    ? [
+        ...people,
+        { lines: [`Vehicles: ${count}${plates.length ? ` (${plates.join(", ")})` : ""}`] },
+      ]
+    : people;
 }
 
 type IndiaTravel = NonNullable<Registration["indiaTravel"]>;
@@ -262,20 +286,24 @@ export function registrationPdf(registration: Registration): Promise<Buffer> {
   // journeys, and the transport team plans them separately.
   const body = (line: string) =>
     doc.font("Helvetica").fontSize(10).fillColor(INK).text(text(line), MARGIN, doc.y, { width });
-  if (OVERSEAS_MANDALS.includes(registration.mandal)) {
-    heading("Travel plan to India");
-    const india = indiaTravelSection(registration);
-    if (india.length === 0) body("Not given");
-    india.forEach(({ who, lines }, index) => {
+  // Both travel sections are laid out alike: a name in bold over each
+  // person's lines when they differ, a gap between people.
+  const groups = (entries: { who?: string; lines: string[] }[]) => {
+    if (entries.length === 0) body("Not given");
+    entries.forEach(({ who, lines }, index) => {
+      if (index > 0) doc.moveDown(0.4);
       if (who) {
-        if (index > 0) doc.moveDown(0.4);
         doc.font("Helvetica-Bold").fontSize(10).fillColor(INK).text(text(who), MARGIN, doc.y);
       }
       lines.forEach(body);
     });
+  };
+  if (OVERSEAS_MANDALS.includes(registration.mandal)) {
+    heading("Travel plan to India");
+    groups(indiaTravelSection(registration));
   }
   heading("Mahotsav travel plan");
-  travelSection(registration).forEach(body);
+  groups(travelSection(registration));
 
   // What to do with it.
   doc.moveDown(1.5);

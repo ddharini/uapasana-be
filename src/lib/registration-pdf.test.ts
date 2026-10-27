@@ -106,12 +106,12 @@ describe("personRow", () => {
 describe("travelLines", () => {
   it("lists vehicles with their plates", () => {
     expect(travelLines(registration.travel)).toEqual([
-      "Personal vehicle",
+      "Travelling by: Personal vehicle",
       "Vehicles: 1 (GJ01AB1234)",
     ]);
   });
 
-  it("gives a train's arrival, pickup and drop", () => {
+  it("gives a train's pickup and drop, laid out like the flights to India", () => {
     const train = {
       ...noTravel,
       mode: "train",
@@ -126,23 +126,43 @@ describe("travelLines", () => {
       departureTime: "18:00",
     } as unknown as Registration["travel"];
     expect(travelLines(train)).toEqual([
-      "Train",
-      "Arriving: 12009 to Kalupur at 08:30",
-      "Pickup in Ahmedabad: Yes",
-      "Drop when leaving: Yes - Train 12010 from Kalupur at 18:00",
+      "Travelling by: Train",
+      "Pickup in Ahmedabad: Kalupur, 08:30 - 12009",
+      "Drop when leaving: Kalupur, 18:00 - Train 12010",
     ]);
   });
 
-  it("gives each person's own when the party travels separately", () => {
+  it("says Not needed for a pickup or drop not asked for, each on its own", () => {
+    const dropOnly = {
+      ...noTravel,
+      mode: "public_bus",
+      needsPickup: false,
+      needsDrop: true,
+      departureMode: "flight",
+      departureReference: "6E 2132",
+      departureTime: "18:45",
+    } as unknown as Registration["travel"];
+    expect(travelLines(dropOnly)).toEqual([
+      "Travelling by: Public bus / ST",
+      "Pickup in Ahmedabad: Not needed",
+      "Drop when leaving: 18:45 - Flight 6E 2132",
+    ]);
+  });
+
+  it("gives each person's own under their name when the party travels separately", () => {
     const separate = {
       ...registration,
-      travel: { ...noTravel, mode: "separate" },
+      travel: { ...noTravel, mode: "separate", vehicleCount: 1, vehicleNumbers: ["GJ01AB1234"] },
       members: [
         member({ travel: { ...noTravel, mode: "mandal_bus" } }),
         member({ fullName: "Riya Patel", travel: null }),
       ],
     } as unknown as Registration;
-    expect(travelSection(separate)).toEqual(["Harit Patel: Mandal bus", "Riya Patel: Not given"]);
+    expect(travelSection(separate)).toEqual([
+      { who: "Harit Patel", lines: ["Travelling by: Mandal bus"] },
+      { who: "Riya Patel", lines: ["Travelling by: Not given"] },
+      { lines: ["Vehicles: 1 (GJ01AB1234)"] },
+    ]);
   });
 });
 
