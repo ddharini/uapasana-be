@@ -21,6 +21,7 @@ const member = (extra: object) => ({
   id: "m1",
   fullName: "Harit Patel",
   firstName: "Harit",
+  gender: "male",
   isPrimary: true,
   ...extra,
 });
@@ -32,7 +33,13 @@ const registration = {
   isSample: false,
   members: [
     member({}),
-    member({ id: "m2", fullName: "Riya Patel", firstName: "Riya", isPrimary: false }),
+    member({
+      id: "m2",
+      fullName: "Riya Patel",
+      firstName: "Riya",
+      gender: "female",
+      isPrimary: false,
+    }),
   ],
   arrival: { date: "2027-01-30", slot: "morning" },
   departure: { date: "2027-02-01", slot: "evening" },
@@ -41,7 +48,7 @@ const registration = {
 describe("confirmationValues", () => {
   it("gives first name, code, people and stay, in that order", () => {
     expect(confirmationValues(registration, "en")).toEqual([
-      "Harit",
+      "Harit bhai",
       "DM-F-0031",
       "2",
       "30 Jan, morning – 1 Feb, evening",
@@ -63,6 +70,16 @@ describe("confirmationValues", () => {
     vi.unstubAllEnvs();
   });
 
+  it("follows the first name with bhai or ben by the contact's gender", () => {
+    const sister = {
+      ...registration,
+      members: [member({ fullName: "Riya Patel", firstName: "Riya", gender: "female" })],
+    } as unknown as Registration;
+    expect(confirmationValues(sister, "en")[0]).toBe("Riya ben");
+    expect(confirmationValues(sister, "gu")[0]).toBe("Riya બેન");
+    expect(confirmationValues(registration, "gu")[0]).toBe("Harit ભાઈ");
+  });
+
   it("writes the stay in Gujarati for a Gujarati form", () => {
     expect(confirmationValues(registration, "gu")[3]).toBe("30 જાન્યુ, સવાર – 1 ફેબ્રુ, સાંજ");
   });
@@ -72,7 +89,7 @@ describe("confirmationValues", () => {
       ...registration,
       members: [member({ firstName: null })],
     } as unknown as Registration;
-    expect(confirmationValues(old, "en")[0]).toBe("Harit");
+    expect(confirmationValues(old, "en")[0]).toBe("Harit bhai");
   });
 });
 

@@ -41,6 +41,16 @@ const SLOT_WORDS: Record<WhatsAppLang, Record<string, string>> = {
   gu: { morning: "સવાર", afternoon: "બપોર", evening: "સાંજ" },
 };
 
+/**
+ * The respect word that follows the contact's first name — "Harit bhai",
+ * "Riya ben" — as it would be said to them. Names are English letters only,
+ * so the Gujarati message reads "Harit ભાઈ".
+ */
+const RESPECT_WORDS: Record<WhatsAppLang, Record<string, string>> = {
+  en: { male: "bhai", female: "ben" },
+  gu: { male: "ભાઈ", female: "બેન" },
+};
+
 /** "30 Jan, morning" / "30 જાન્યુ, સવાર" — a calendar day at the venue, no time zone. */
 function formatStayPoint(point: { date: string; slot: string }, lang: WhatsAppLang) {
   const [y, m, d] = point.date.split("-").map(Number);
@@ -54,7 +64,8 @@ function formatStayPoint(point: { date: string; slot: string }, lang: WhatsAppLa
 }
 
 /**
- * The template's `{{1}}`…`{{4}}`, in order: the contact's first name, the
+ * The template's `{{1}}`…`{{4}}`, in order: the contact's first name with
+ * bhai or ben after it, the
  * registration's code (a family's `DM-F-…`, an individual's own), how many
  * people it covers, and its stay from the first person in to the last out,
  * then the PDF link when the server can sign one.
@@ -66,8 +77,10 @@ export function confirmationValues(
   const contact = registration.members.find(m => m.isPrimary) ?? registration.members[0];
   const stay = `${formatStayPoint(registration.arrival, lang)} – ${formatStayPoint(registration.departure, lang)}`;
   const link = registrationPdfUrl(registration.id);
+  const name = contact?.firstName?.trim() || contact?.fullName.split(" ")[0] || "";
+  const respect = contact && RESPECT_WORDS[lang][contact.gender];
   return [
-    contact?.firstName?.trim() || contact?.fullName.split(" ")[0] || "",
+    name && respect ? `${name} ${respect}` : name,
     registration.code,
     String(registration.members.length),
     link ? `${stay}. ${DETAILS_WORDS[lang]}: ${link}` : stay,
