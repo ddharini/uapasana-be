@@ -3,7 +3,14 @@ import { createHmac, timingSafeEqual } from "crypto";
 import PDFDocument from "pdfkit";
 import type { Registration } from "@prisma/client";
 
-import { EVENT_NAME, OVERSEAS_MANDALS, formatDay, isJourneyMode, statusOf } from "./event";
+import {
+  EVENT_NAME,
+  OVERSEAS_MANDALS,
+  formatDay,
+  isJourneyMode,
+  isLocalMandal,
+  statusOf,
+} from "./event";
 import { wantsBed } from "./registrations";
 
 /**
@@ -242,10 +249,12 @@ export function registrationPdf(registration: Registration): Promise<Buffer> {
   if (contact)
     field("Contact", `${contact.fullName}${contact.mobile ? `, ${contact.mobile}` : ""}`);
   field("People", String(registration.members.length));
-  field(
-    "Stay",
-    `${formatStayPoint(registration.arrival)} - ${formatStayPoint(registration.departure)}`
-  );
+  // A nearby mandal comes from home each day: its dates are attendance, not a stay.
+  const dates = `${formatStayPoint(registration.arrival)} - ${formatStayPoint(registration.departure)}`;
+  if (isLocalMandal(registration.mandal)) {
+    field("Stay", "Not needed (local)");
+    field("Attending", dates);
+  } else field("Stay", dates);
   field("Status", STATUS_LABELS[statusOf(registration.status)] ?? registration.status);
   field("Registered on", formatDate(registration.createdAt));
   if (registration.editedAt) field("Last updated", formatDate(registration.editedAt));

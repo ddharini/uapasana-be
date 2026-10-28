@@ -1,5 +1,6 @@
 import type { Registration } from "@prisma/client";
 
+import { isLocalMandal } from "./event";
 import { registrationPdfUrl } from "./registration-pdf";
 import {
   WHATSAPP_TEMPLATES,
@@ -35,6 +36,17 @@ const DETAILS_WORDS: Record<WhatsAppLang, string> = {
   gu: "બધાની વિગતો",
 };
 
+/**
+ * What follows the template's fixed "Stay:" for a nearby mandal. They come
+ * from home each day and were never asked about a bed, so their dates are the
+ * days they attend, not a stay — read as one, a devotee from Ahmedabad took
+ * it that we had booked them a room.
+ */
+const LOCAL_WORDS: Record<WhatsAppLang, { notNeeded: string; attending: string }> = {
+  en: { notNeeded: "Not needed (local)", attending: "Attending" },
+  gu: { notNeeded: "જરૂર નથી (સ્થાનિક)", attending: "હાજરી" },
+};
+
 /** The slot words in each language the template is approved in. */
 const SLOT_WORDS: Record<WhatsAppLang, Record<string, string>> = {
   en: { morning: "morning", afternoon: "afternoon", evening: "evening" },
@@ -67,15 +79,20 @@ function formatStayPoint(point: { date: string; slot: string }, lang: WhatsAppLa
  * The template's `{{1}}`…`{{4}}`, in order: the contact's first name with
  * bhai or ben after it, the
  * registration's code (a family's `DM-F-…`, an individual's own), how many
- * people it covers, and its stay from the first person in to the last out,
- * then the PDF link when the server can sign one.
+ * people it covers, and its stay from the first person in to the last out
+ * (for a nearby mandal, that none is needed and the days they attend), then
+ * the PDF link when the server can sign one.
  */
 export function confirmationValues(
-  registration: Pick<Registration, "id" | "code" | "members" | "arrival" | "departure">,
+  registration: Pick<Registration, "id" | "code" | "mandal" | "members" | "arrival" | "departure">,
   lang: WhatsAppLang
 ): string[] {
   const contact = registration.members.find(m => m.isPrimary) ?? registration.members[0];
-  const stay = `${formatStayPoint(registration.arrival, lang)} – ${formatStayPoint(registration.departure, lang)}`;
+  const dates = `${formatStayPoint(registration.arrival, lang)} – ${formatStayPoint(registration.departure, lang)}`;
+  const local = LOCAL_WORDS[lang];
+  const stay = isLocalMandal(registration.mandal)
+    ? `${local.notNeeded}. ${local.attending}: ${dates}`
+    : dates;
   const link = registrationPdfUrl(registration.id);
   const name = contact?.firstName?.trim() || contact?.fullName.split(" ")[0] || "";
   const respect = contact && RESPECT_WORDS[lang][contact.gender];

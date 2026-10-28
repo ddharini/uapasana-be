@@ -29,6 +29,7 @@ const member = (extra: object) => ({
 const registration = {
   id: "65f1a2b3c4d5e6f7a8b9c0d1",
   code: "DM-F-0031",
+  mandal: "Surat",
   contactMobile: "+919876543210",
   isSample: false,
   members: [
@@ -78,6 +79,16 @@ describe("confirmationValues", () => {
     expect(confirmationValues(sister, "en")[0]).toBe("Riya ben");
     expect(confirmationValues(sister, "gu")[0]).toBe("Riya બેન");
     expect(confirmationValues(registration, "gu")[0]).toBe("Harit ભાઈ");
+  });
+
+  it("says a nearby mandal needs no stay, and gives the days they attend", () => {
+    const local = { ...registration, mandal: "Ahmedabad - Naroda" } as unknown as Registration;
+    expect(confirmationValues(local, "en")[3]).toBe(
+      "Not needed (local). Attending: 30 Jan, morning – 1 Feb, evening"
+    );
+    expect(confirmationValues(local, "gu")[3]).toBe(
+      "જરૂર નથી (સ્થાનિક). હાજરી: 30 જાન્યુ, સવાર – 1 ફેબ્રુ, સાંજ"
+    );
   });
 
   it("writes the stay in Gujarati for a Gujarati form", () => {
