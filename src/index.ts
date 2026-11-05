@@ -13,6 +13,7 @@ import { errorHandler } from "./middlewares/errorHandler";
 import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./utils/swagger";
 import { resumeBroadcasts } from "./lib/broadcasts";
+import { startBackupSchedule } from "./lib/backup";
 
 const app = express();
 
@@ -82,6 +83,8 @@ async function startServer() {
       resumeBroadcasts().catch(error =>
         console.error("[Broadcast] Could not resume sends:", error)
       );
+      // A database copy to R2 every 12 hours, newest two kept (production only).
+      startBackupSchedule();
     });
 
     const shutdown = async () => {

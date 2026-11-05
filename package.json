@@ -19,7 +19,8 @@
     "seed:schedule": "ts-node scripts/seed-schedule.ts",
     "seed:accommodation": "ts-node scripts/seed-accommodation.ts",
     "grant-role": "ts-node scripts/grant-role.ts",
-    "wa:test": "ts-node scripts/send-test-whatsapp.ts"
+    "wa:test": "ts-node scripts/send-test-whatsapp.ts",
+    "backup:db": "ts-node scripts/backup-db.ts"
   },
   "keywords": [
     "express",
@@ -31,6 +32,7 @@
   "packageManager": "pnpm@10.12.4",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
+    "@aws-sdk/client-s3": "^3.1158.0",
     "@better-auth/prisma-adapter": "^1.6.25",
     "@google/genai": "^2.22.0",
     "@prisma/client": "^6.17.0",
@@ -39,6 +41,7 @@
     "cors": "^2.8.5",
     "dotenv-flow": "^4.1.0",
     "express": "^5.3.0",
+    "mongodb": "^6.21.0",
     "pdfkit": "^0.17.2",
     "prisma": "^6.17.0",
     "resend": "^6.22.1",
