@@ -129,6 +129,7 @@ export const MANDALS = [
   "Bhavnagar",
   "Rajpipla",
   "Jasdan",
+  "Visnagar",
   "Delhi",
   "South Gujarat",
   "North Gujarat",
