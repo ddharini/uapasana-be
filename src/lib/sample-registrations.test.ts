@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 // helpers; building the samples never touches it.
 vi.mock("../utils/db", () => ({ prisma: {} }));
 
-import { EVENT_DAYS, YOUTH_MAX_AGE, isLocalMandal } from "./event";
+import { EVENT_DAYS, isLocalMandal, isYouthAge } from "./event";
 import { newRegistrationSchema, toCreateData } from "./registrations";
 import { SAMPLE_COUNT, buildSampleRegistrations } from "./sample-registrations";
 
@@ -78,10 +78,10 @@ describe("sample registrations", () => {
     expect(
       saved.some(r => r.accommodationRequired && r.members.some(m => !m.needsAccommodation))
     ).toBe(true);
-    // Youth Convention answers, both ways, only for 40 and under.
+    // Youth Convention answers, both ways, only for ages 13 to 40.
     expect(people.some(m => m.attendsYouthConvention === true)).toBe(true);
     expect(people.some(m => m.attendsYouthConvention === false)).toBe(true);
-    expect(people.every(m => m.age <= YOUTH_MAX_AGE || m.attendsYouthConvention == null)).toBe(
+    expect(people.every(m => isYouthAge(m.age) || m.attendsYouthConvention == null)).toBe(
       true
     );
     // Both ways of verifying the contact's mobile.

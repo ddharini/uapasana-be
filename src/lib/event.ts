@@ -76,8 +76,12 @@ export const JOURNEY_MODES = ["train", "public_bus", "flight"] as const;
 export const isJourneyMode = (mode: string): mode is (typeof JOURNEY_MODES)[number] =>
   (JOURNEY_MODES as readonly string[]).includes(mode);
 
+/** The youngest age asked whether they will attend the Youth Convention. Mirrors the frontend. */
+export const YOUTH_MIN_AGE = 13;
 /** The oldest age asked whether they will attend the Youth Convention. Mirrors the frontend. */
 export const YOUTH_MAX_AGE = 40;
+/** Whether someone of this age is asked about the Youth Convention. Mirrors asksYouthConvention on the frontend. */
+export const isYouthAge = (age: number) => age >= YOUTH_MIN_AGE && age <= YOUTH_MAX_AGE;
 
 /** The Ahmedabad stations a train can arrive at. Mirrors TRAIN_STATIONS on the frontend. */
 export const TRAIN_STATIONS = [

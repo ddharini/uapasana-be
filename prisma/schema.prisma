@@ -402,7 +402,7 @@ type RegistrationMember {
   isPrimary          Boolean
   needsAssistance    Boolean
   assistanceNote     String?
-  /// Aged 40 or under (YOUTH_MAX_AGE): whether they will attend the Youth
+  /// Aged 13 to 40 (YOUTH_MIN_AGE..YOUTH_MAX_AGE): whether they will attend the Youth
   /// Convention. Optional, so null when not answered or not asked.
   attendsYouthConvention Boolean?
   arrival            StayPoint

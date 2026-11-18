@@ -20,7 +20,7 @@ import {
   MANDALS,
   OVERSEAS_MANDALS,
   TRAIN_STATIONS,
-  YOUTH_MAX_AGE,
+  isYouthAge,
   formatFamilyCode,
   formatPersonCode,
   isLocalMandal,
@@ -331,8 +331,8 @@ export function buildSampleRegistrations(): SeedRegistration[] {
         : undefined,
       arrival: schedule[0],
       departure: schedule[1],
-      // Asked of everyone 40 and under; a few skip it, as it is optional.
-      ...(fields.age <= YOUTH_MAX_AGE && chance(0.85)
+      // Asked of everyone aged 13 to 40; a few skip it, as it is optional.
+      ...(isYouthAge(fields.age) && chance(0.85)
         ? { attendsYouthConvention: chance(0.6) }
         : {}),
     };

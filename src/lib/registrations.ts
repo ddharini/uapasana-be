@@ -21,7 +21,7 @@ import {
   TRAVEL_MODES,
   PERSON_TRAVEL_MODES,
   JOURNEY_MODES,
-  YOUTH_MAX_AGE,
+  isYouthAge,
   isJourneyMode,
   compareStay,
   isLocalMandal,
@@ -203,7 +203,7 @@ const member = z.preprocess(
     departure: departurePoint,
     /** Asks for a bed for this person. Absent: as `accommodationRequired` says for everyone. */
     needsAccommodation: z.boolean().optional(),
-    /** Aged YOUTH_MAX_AGE or under: whether they will attend the Youth Convention. Optional. */
+    /** Aged YOUTH_MIN_AGE to YOUTH_MAX_AGE (isYouthAge): whether they will attend the Youth Convention. Optional. */
     attendsYouthConvention: z.boolean().optional(),
     /**
      * Arriving early for seva as a Swayam Sevak: this person may arrive and
@@ -500,7 +500,7 @@ export function toCreateData(input: NewRegistrationInput, existingIds: readonly 
     isPrimary: index === 0,
     relation: input.type === "family" && index > 0 ? m.relation : null,
     assistanceNote: m.needsAssistance ? m.assistanceNote : null,
-    attendsYouthConvention: m.age <= YOUTH_MAX_AGE ? (m.attendsYouthConvention ?? null) : null,
+    attendsYouthConvention: isYouthAge(m.age) ? (m.attendsYouthConvention ?? null) : null,
     earlySeva: m.earlySeva ?? false,
     // Someone who leaves the day they arrive has no night here, so no bed.
     needsAccommodation:
