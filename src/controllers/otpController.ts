@@ -55,7 +55,11 @@ const send = async (req: Request, res: Response): Promise<void> => {
   const hourAgo = new Date(now - 60 * MINUTE);
   const [last, sentToNumber, sentOverall] = await Promise.all([
     prisma.phoneVerification.findFirst({ where: { mobile }, orderBy: { createdAt: "desc" } }),
-    prisma.phoneVerification.count({ where: { mobile, createdAt: { gt: hourAgo } } }),
+    prisma.phoneVerification.findMany({
+      where: { mobile, createdAt: { gt: hourAgo } },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
     prisma.phoneVerification.count({ where: { createdAt: { gt: hourAgo } } }),
   ]);
 
@@ -67,8 +71,19 @@ const send = async (req: Request, res: Response): Promise<void> => {
       retryAfterSeconds: waitSeconds,
     });
   }
-  if (sentToNumber >= OTP_MAX_PER_NUMBER_PER_HOUR) {
-    return fail(res, 429, "OTP_LIMIT", "Too many codes sent to this number. Try again in an hour.");
+  if (sentToNumber.length >= OTP_MAX_PER_NUMBER_PER_HOUR) {
+    // The window is rolling, so the wait is until the oldest code in it is an
+    // hour old — not "an hour", which devotees read as an hour from now and
+    // then, trying after thirty minutes, found still refused.
+    const freesAt = sentToNumber[0].createdAt.getTime() + 60 * MINUTE;
+    const minutes = Math.max(1, Math.ceil((freesAt - now) / MINUTE));
+    return fail(
+      res,
+      429,
+      "OTP_LIMIT",
+      `Too many codes sent to this number. Try again in ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`,
+      { retryAfterSeconds: Math.ceil((freesAt - now) / 1000) }
+    );
   }
   if (sentOverall >= otpMaxPerHour()) {
     console.error(`[OTP] Hourly cap of ${otpMaxPerHour()} codes reached — refusing sends.`);
@@ -128,23 +143,42 @@ const verify = async (req: Request, res: Response): Promise<void> => {
   }
   const { mobile, code } = parsed.data;
 
-  // Only the newest code counts: asking for a new one retires the old.
-  const record = await prisma.phoneVerification.findFirst({
-    where: { mobile },
-    orderBy: { createdAt: "desc" },
-  });
+  // Every unexpired, unused code for the number works — not only the newest.
+  // Retiring the old code on each resend was the commonest way devotees
+  // failed: WhatsApp is slow, they asked again, then typed the code that had
+  // arrived first (or the one their keyboard offered from an earlier
+  // message), were told it was wrong, asked again, and ran into the hourly
+  // limit within minutes. Measured on 2026-11-18. The guessing odds barely
+  // move: at most OTP_MAX_PER_NUMBER_PER_HOUR live codes, each a one-in-a-
+  // million target, behind the same OTP_MAX_ATTEMPTS.
+  const [newest, live] = await Promise.all([
+    prisma.phoneVerification.findFirst({ where: { mobile }, orderBy: { createdAt: "desc" } }),
+    prisma.phoneVerification.findMany({
+      where: {
+        mobile,
+        expiresAt: { gt: new Date() },
+        OR: [{ verifiedAt: null }, { verifiedAt: { isSet: false } }],
+      },
+      orderBy: { createdAt: "desc" },
+      take: OTP_MAX_PER_NUMBER_PER_HOUR,
+    }),
+  ]);
 
-  if (record?.verifiedAt) {
-    return fail(res, 400, "OTP_EXPIRED", "This code has already been used. Send a new one.");
-  }
-  if (!record || record.expiresAt.getTime() <= Date.now()) {
-    return fail(res, 400, "OTP_EXPIRED", "This code has expired. Send a new one.");
+  // Wrong guesses are counted on the newest live code, so one budget of
+  // OTP_MAX_ATTEMPTS covers every code in play and a resend renews it.
+  const record = live[0];
+  if (!record) {
+    return newest?.verifiedAt
+      ? fail(res, 400, "OTP_EXPIRED", "This code has already been used. Send a new one.")
+      : fail(res, 400, "OTP_EXPIRED", "This code has expired. Send a new one.");
   }
   if (record.attempts >= OTP_MAX_ATTEMPTS) {
     return fail(res, 429, "OTP_TOO_MANY_ATTEMPTS", "Too many wrong codes. Send a new one.");
   }
 
-  if (!sameHash(record.codeHash, hashOtpCode(mobile, code))) {
+  const codeHash = hashOtpCode(mobile, code);
+  const match = live.find((r) => sameHash(r.codeHash, codeHash));
+  if (!match) {
     const attempts = record.attempts + 1;
     await prisma.phoneVerification.update({ where: { id: record.id }, data: { attempts } });
     const left = OTP_MAX_ATTEMPTS - attempts;
@@ -160,7 +194,7 @@ const verify = async (req: Request, res: Response): Promise<void> => {
   // Conditional on still being unverified, so the same code entered twice at
   // once yields one token, not two.
   const { count } = await prisma.phoneVerification.updateMany({
-    where: { id: record.id, OR: [{ verifiedAt: null }, { verifiedAt: { isSet: false } }] },
+    where: { id: match.id, OR: [{ verifiedAt: null }, { verifiedAt: { isSet: false } }] },
     data: {
       verifiedAt: new Date(),
       tokenHash,
