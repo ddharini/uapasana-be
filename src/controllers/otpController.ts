@@ -14,6 +14,7 @@ import {
   sendOtpSchema,
   verifyOtpSchema,
 } from "../lib/otp";
+import { registrationsWithNumbers, toNumberUseSummary } from "../lib/number-in-use";
 import { toRegistrationSummary } from "../lib/registrations";
 import { WHATSAPP_TEMPLATES, isWhatsAppConfigured, sendWhatsAppTemplate } from "../lib/whatsapp";
 import { prisma } from "../utils/db";
@@ -23,7 +24,7 @@ import { prisma } from "../utils/db";
  * without an account.
  *
  *   POST /otp/send     { mobile }        a code on WhatsApp
- *   POST /otp/verify   { mobile, code }  → { verificationToken, existing }
+ *   POST /otp/verify   { mobile, code }  → { verificationToken, existing, listed }
  *
  * The token goes into the registration request; registrationController spends
  * it. See `PhoneVerification` in schema.prisma for the whole flow.
@@ -213,9 +214,22 @@ const verify = async (req: Request, res: Response): Promise<void> => {
     orderBy: { createdAt: "desc" },
   });
 
+  // Where else this number is used — typed against a family member, not as
+  // the contact (that is `existing`). One number, one registration
+  // (lib/number-in-use.ts): the form stops on it and says which registration
+  // and whose entry, so they know whom to ask. Safe for the same reason as
+  // `existing`: the code just proved the number is theirs.
+  const listed = (await registrationsWithNumbers([mobile]))
+    .filter((r) => r.contactMobile !== mobile)
+    .flatMap((r) => r.members.filter((m) => m.mobile === mobile).map((m) => toNumberUseSummary(r, m, true)));
+
   res.status(200).json({
     success: true,
-    data: { verificationToken: token, existing: existing.map((r) => toRegistrationSummary(r, true)) },
+    data: {
+      verificationToken: token,
+      existing: existing.map((r) => toRegistrationSummary(r, true)),
+      listed,
+    },
   });
 };
 

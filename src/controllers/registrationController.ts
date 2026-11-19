@@ -7,6 +7,7 @@ import { MOBILE_E164 } from "../lib/event";
 // PAUSED 2026-10-11 — per-person room allotment (rooms now go to mandals).
 // import { releaseStaleAllotments, stayForDevotee } from "../lib/allotments";
 import { MOBILE_OTP_REQUIRED, consumeVerificationToken, peekVerificationToken } from "../lib/otp";
+import { numbersInUse, toNumberUseSummary } from "../lib/number-in-use";
 import { takeNumbers, withCodes } from "../lib/registration-codes";
 import { recordChange } from "../lib/registration-changes";
 import { confirmationLang, sendRegistrationConfirmation } from "../lib/registration-confirmation";
@@ -92,6 +93,45 @@ function alreadyRegistered(req: Request, res: Response, existing: Registration) 
   });
 }
 
+/**
+ * One mobile number, one registration (lib/number-in-use.ts). Answers 409
+ * NUMBER_IN_USE and returns true when anyone being saved has a number already
+ * on another active registration — as its contact or as a family member. An
+ * edit checks only numbers new to it (`kept`). `errors[]` points at each such
+ * person's mobile, which is how the form knows whom it means; `people` says
+ * where each number is.
+ *
+ * Not backed by an index — a number inside an embedded list cannot carry a
+ * cross-document unique index here — so two submits racing can still both
+ * land. Rare enough to leave to the desk.
+ */
+async function numberInUse(
+  res: Response,
+  input: NewRegistrationInput,
+  kept?: Pick<Registration, "id" | "members">
+) {
+  const found = await numbersInUse(input.members, kept);
+  if (found.length === 0) return false;
+  const [first] = found;
+  res.status(409).json({
+    success: false,
+    code: "NUMBER_IN_USE",
+    message:
+      found.length === 1
+        ? `This number is already used in another registration (${first.registration.code}). Each mobile number can be on one registration only.`
+        : `${found.length} numbers here are already used in other registrations. Each mobile number can be on one registration only.`,
+    errors: found.map(({ index, registration }) => ({
+      path: `members.${index}.mobile`,
+      message: `Already used in ${registration.code}`,
+    })),
+    people: found.map(({ index, registration, member }) => ({
+      index,
+      ...toNumberUseSummary(registration, member, false),
+    })),
+  });
+  return true;
+}
+
 /** Prisma's unique-violation, on the contact-number index: two submits raced. */
 const isDuplicateContact = (error: unknown) =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
@@ -151,6 +191,7 @@ const create = async (req: Request, res: Response): Promise<void> => {
   if (!parsed.success) return validationError(res, parsed.error.issues);
   if (!withinMandal(req, res, parsed.data.mandal)) return;
   if (await contactTaken(req, res, parsed.data.members[0]?.mobile)) return;
+  if (await numberInUse(res, parsed.data)) return;
 
   const verification = await verifyPrimaryMobile(req, res, parsed.data);
   if (!verification || verification === "unchanged") return;
@@ -284,6 +325,7 @@ const update = async (req: Request, res: Response): Promise<void> => {
   if (!withinMandal(req, res, parsed.data.mandal)) return;
 
   if (await contactTaken(req, res, parsed.data.members[0]?.mobile, id)) return;
+  if (await numberInUse(res, parsed.data, existing)) return;
   const verification = await verifyPrimaryMobile(req, res, parsed.data, existing.members[0]?.mobile ?? undefined);
   if (!verification) return;
 
@@ -384,6 +426,8 @@ const updateSelf = async (req: Request, res: Response): Promise<void> => {
     });
     return;
   }
+  // Before the token is spent, so a refusal here leaves it for the retry.
+  if (await numberInUse(res, parsed.data, existing)) return;
   const token = parsed.data.mobileVerificationToken;
   if (!token || !(await consumeVerificationToken(token, ownerMobile))) {
     res.status(400).json({

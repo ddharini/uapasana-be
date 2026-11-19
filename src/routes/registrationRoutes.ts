@@ -32,6 +32,12 @@ const { create, list, getOne, lookup, taken, setStatus, update, mine, updateSelf
  *         description: The stored registration, with its code
  *       400:
  *         description: VALIDATION_ERROR, with every field problem in `errors`
+ *       409:
+ *         description: >
+ *           ALREADY_REGISTERED — the contact number has a registration; or
+ *           NUMBER_IN_USE — a mobile on it (anyone's) is already on another
+ *           active registration; `errors` points at each person's mobile,
+ *           `people` says where each number is
  */
 registrationRouter.post("/", optionalSession, create);
 
@@ -69,7 +75,11 @@ registrationRouter.post("/mine", mine);
  *       400:
  *         description: VALIDATION_ERROR, CONTACT_LOCKED or MOBILE_NOT_VERIFIED
  *       409:
- *         description: NOT_EDITABLE — checked in or cancelled
+ *         description: >
+ *           NOT_EDITABLE — checked in or cancelled; or
+ *           NUMBER_IN_USE — a mobile on it (anyone's) is already on another
+ *           active registration; `errors` points at each person's mobile,
+ *           `people` says where each number is (only numbers new to this registration are checked)
  */
 registrationRouter.patch("/:id/self", updateSelf);
 
@@ -218,5 +228,11 @@ registrationRouter.patch("/:id/status", requireReviewer, setStatus);
  *         description: WRONG_MANDAL or IN_PERSON_NOT_ALLOWED
  *       404:
  *         description: NOT_FOUND (or outside a sanchalak's mandal)
+ *       409:
+ *         description: >
+ *           ALREADY_REGISTERED; or
+ *           NUMBER_IN_USE — a mobile on it (anyone's) is already on another
+ *           active registration; `errors` points at each person's mobile,
+ *           `people` says where each number is (only numbers new to this registration are checked)
  */
 registrationRouter.patch("/:id", update);

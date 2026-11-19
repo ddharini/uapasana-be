@@ -64,7 +64,11 @@ otpRouter.post("/send", send);
  *               code: { type: string }
  *     responses:
  *       200:
- *         description: "`{ verificationToken }`"
+ *         description: >
+ *           `{ verificationToken, existing, listed }` — `existing`: the
+ *           registrations this number is the contact for; `listed`: where
+ *           else it is used — family members on other active registrations
+ *           with this number. Either means it cannot start a new registration
  *       400:
  *         description: OTP_WRONG or OTP_EXPIRED
  *       429:
