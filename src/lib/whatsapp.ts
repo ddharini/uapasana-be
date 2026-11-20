@@ -68,6 +68,11 @@ export const WHATSAPP_TEMPLATES = {
   /** {{1}} contact's first name, {{2}} registration code, {{3}} people, {{4}} stay. Utility, en + gu. */
   registrationConfirmation: () =>
     process.env.WA_TEMPLATE_REGISTRATION || "registration_confirmation",
+  /**
+   * Document header (the Excel file); {{1}} when, {{2}} registrations, {{3}} people,
+   * {{4}} new in the last 24 hours. Utility, English. See lib/daily-report.ts.
+   */
+  dailyReport: () => process.env.WA_TEMPLATE_DAILY_REPORT || "daily_registration_report",
   /** {{1}} contact's name, {{2}} event, {{3}} where everyone stays, on one line. Paused feature. */
   stayDetails: () => process.env.WA_TEMPLATE_ROOM_DETAILS || "room_details",
 };
@@ -132,9 +137,29 @@ export function toWhatsAppNumber(phone: string): string {
   return digits;
 }
 
-/** The Cloud API's `components` for a template: body values in order, then one URL-button value. */
-export function templateComponents(body: string[] = [], buttonUrl?: string) {
+/** A file already uploaded to Meta (`uploadWhatsAppMedia`), for a template's document header. */
+export type TemplateDocument = { id: string; filename: string };
+
+/**
+ * The Cloud API's `components` for a template: a document header when there
+ * is one, body values in order, then one URL-button value.
+ */
+export function templateComponents(
+  body: string[] = [],
+  buttonUrl?: string,
+  document?: TemplateDocument
+) {
   const components: object[] = [];
+  // The filename is what the reader sees on the attachment; without it
+  // WhatsApp shows the media id.
+  if (document) {
+    components.push({
+      type: "header",
+      parameters: [
+        { type: "document", document: { id: document.id, filename: document.filename } },
+      ],
+    });
+  }
   if (body.length > 0) {
     components.push({ type: "body", parameters: body.map(text => ({ type: "text", text })) });
   }
@@ -230,6 +255,8 @@ export async function sendWhatsAppTemplate(options: {
   body?: string[];
   /** Value for a "Visit website" button's dynamic URL suffix, or an Authentication template's code. */
   buttonUrl?: string;
+  /** The file for a template whose header is a document. */
+  document?: TemplateDocument;
   /** Usage-ledger attribution. */
   usage: { endpoint: string; userId?: string };
   /** Meta's category of the template, for the price in the ledger. Utility when left out. */
@@ -248,7 +275,7 @@ export async function sendWhatsAppTemplate(options: {
     template: {
       name: options.template,
       language: { code: languageCode },
-      components: templateComponents(options.body, options.buttonUrl),
+      components: templateComponents(options.body, options.buttonUrl, options.document),
     },
   });
 
@@ -289,6 +316,58 @@ export async function sendWhatsAppTemplate(options: {
     }),
   ]);
   return { waMessageId };
+}
+
+/**
+ * Uploads a file to Meta for sending, and returns its media id.
+ *
+ * Meta keeps an uploaded file for 30 days, and one id may be sent to any number
+ * of people, so a file going to several recipients is uploaded once. Uploading
+ * is free; only the message that carries it is billed. No retry: callers that
+ * send on a schedule simply try again at the next check.
+ */
+export async function uploadWhatsAppMedia(file: {
+  bytes: Buffer;
+  filename: string;
+  mimeType: string;
+}): Promise<string> {
+  if (!isWhatsAppConfigured()) throw new WhatsAppUnavailableError();
+  const version = process.env.WA_GRAPH_VERSION || "v25.0";
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", file.mimeType);
+  form.append(
+    "file",
+    new Blob([new Uint8Array(file.bytes)], { type: file.mimeType }),
+    file.filename
+  );
+
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://graph.facebook.com/${version}/${process.env.WA_PHONE_NUMBER_ID}/media`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.WA_ACCESS_TOKEN}` },
+        body: form,
+        // A workbook of a few hundred kilobytes; give it longer than a message.
+        signal: AbortSignal.timeout(30_000),
+      }
+    );
+  } catch (error) {
+    throw new WhatsAppSendError(
+      `Could not reach Meta: ${(error as Error).message}`,
+      0,
+      undefined,
+      true
+    );
+  }
+  const result = (await response.json().catch(() => null)) as {
+    id?: string;
+    error?: GraphError;
+  } | null;
+  if (!response.ok || !result?.id) throw toSendError(response.status, result?.error);
+  return result.id;
 }
 
 /** A message template as Meta lists it, as much of it as we read. */

@@ -20,7 +20,8 @@
     "seed:accommodation": "ts-node scripts/seed-accommodation.ts",
     "grant-role": "ts-node scripts/grant-role.ts",
     "wa:test": "ts-node scripts/send-test-whatsapp.ts",
-    "backup:db": "ts-node scripts/backup-db.ts"
+    "backup:db": "ts-node scripts/backup-db.ts",
+    "report:daily": "ts-node scripts/daily-report.ts"
   },
   "keywords": [
     "express",
@@ -47,6 +48,7 @@
     "resend": "^6.22.1",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
+    "write-excel-file": "^4.1.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

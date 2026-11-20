@@ -14,6 +14,7 @@ import swaggerUi from "swagger-ui-express";
 import { swaggerSpec } from "./utils/swagger";
 import { resumeBroadcasts } from "./lib/broadcasts";
 import { startBackupSchedule } from "./lib/backup";
+import { startDailyReportSchedule } from "./lib/daily-report";
 
 const app = express();
 
@@ -85,6 +86,8 @@ async function startServer() {
       );
       // A database copy to R2 every 12 hours, newest two kept (production only).
       startBackupSchedule();
+      // The registration report on WhatsApp at 4 pm IST to DAILY_REPORT_TO (production only).
+      startDailyReportSchedule();
     });
 
     const shutdown = async () => {
