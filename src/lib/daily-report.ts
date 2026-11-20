@@ -2,9 +2,7 @@ import type { Registration } from "@prisma/client";
 import writeXlsxFile, { type Row } from "write-excel-file/node";
 
 import { prisma } from "../utils/db";
-import { EVENT_NAME, formatDay } from "./event";
-import { STATUS_LABELS, TRAVEL_LABELS } from "./registration-pdf";
-import { isSevak, wantsBed } from "./registrations";
+import { EVENT_NAME } from "./event";
 import {
   WHATSAPP_TEMPLATES,
   WhatsAppSendError,
@@ -136,10 +134,6 @@ export function formatIst(at: Date) {
     .replace(/\b(AM|PM)\b/, match => match.toLowerCase());
 }
 
-/** "2026-11-21 16:05" in India — sorts as text, so the column sorts in Excel. */
-const sortableIst = (at: Date) =>
-  new Date(at.getTime() + IST_OFFSET_MS).toISOString().slice(0, 16).replace("T", " ");
-
 // ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
@@ -149,9 +143,9 @@ type ReportRegistration = Pick<
   | "code"
   | "sequence"
   | "type"
+  | "groupName"
   | "mandal"
   | "members"
-  | "travel"
   | "accommodationRequired"
   | "earlySeva"
   | "status"
@@ -159,128 +153,30 @@ type ReportRegistration = Pick<
   | "createdAt"
 >;
 
-export interface MandalLine {
-  mandal: string;
-  registrations: number;
-  people: number;
-  male: number;
-  female: number;
-  beds: number;
-  newPeople: number;
-}
-
+/** The numbers the WhatsApp message itself carries. */
 export interface DailyReport {
   at: Date;
   registrations: number;
   people: number;
-  families: number;
-  individuals: number;
-  checkedIn: number;
-  cancelled: number;
   newRegistrations: number;
   newPeople: number;
-  mandals: MandalLine[];
-  /** One row per person on an active registration, in registration order. */
-  devotees: (string | number)[][];
 }
 
-export const DEVOTEE_HEADER = [
-  "Reg. no.",
-  "Person no.",
-  "Name",
-  "Gender",
-  "Age",
-  "Relation",
-  "Mandal",
-  "Mobile",
-  "Arrives",
-  "Leaves",
-  "Travel",
-  "Needs a bed",
-  "Youth Convention",
-  "Swayam Sevak",
-  "Status",
-  "Registered on (IST)",
-];
-
-const yesNo = (value: boolean | null | undefined) =>
-  value === true ? "Yes" : value === false ? "No" : "";
-const capitalise = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
-const stayPoint = (point: { date: string; slot: string }) =>
-  `${formatDay(point.date)}, ${point.slot}`;
 /** Registrations saved before "pending" was retired still say it; read as registered (statusOf). */
-const statusOf = (status: string) => (status === "pending" ? "confirmed" : status);
+const isActive = (r: Pick<Registration, "status">) => r.status !== "cancelled";
 
-/** Every number in the report, from the registrations as stored. Pure, so it is tested without a database. */
+/** The message's numbers. Cancelled registrations are left out, as everywhere in the report. */
 export function summarise(all: ReportRegistration[], at: Date): DailyReport {
   const since = at.getTime() - 24 * 60 * 60 * 1000;
-  const active = all
-    .filter(r => statusOf(r.status) !== "cancelled")
-    .sort((a, b) => a.sequence - b.sequence);
-  const byMandal = new Map<string, MandalLine>();
-  const devotees: (string | number)[][] = [];
-
-  for (const r of active) {
-    const isNew = r.createdAt.getTime() >= since;
-    const line =
-      byMandal.get(r.mandal) ??
-      byMandal
-        .set(r.mandal, {
-          mandal: r.mandal,
-          registrations: 0,
-          people: 0,
-          male: 0,
-          female: 0,
-          beds: 0,
-          newPeople: 0,
-        })
-        .get(r.mandal)!;
-    line.registrations += 1;
-    for (const m of r.members) {
-      line.people += 1;
-      if (m.gender === "male") line.male += 1;
-      if (m.gender === "female") line.female += 1;
-      if (wantsBed(r, m)) line.beds += 1;
-      if (isNew) line.newPeople += 1;
-
-      // A party that does not all travel the same way has each person's own mode on them.
-      const mode = r.travel.mode === "separate" ? (m.travel?.mode ?? "separate") : r.travel.mode;
-      devotees.push([
-        r.code,
-        m.code ?? "",
-        m.fullName,
-        capitalise(m.gender),
-        m.age,
-        m.isPrimary ? "Contact" : (m.relation ?? ""),
-        r.mandal,
-        m.mobile ?? (m.isPrimary ? (r.contactMobile ?? "") : ""),
-        stayPoint(m.arrival),
-        stayPoint(m.departure),
-        TRAVEL_LABELS[mode] ?? mode,
-        wantsBed(r, m) ? "Yes" : "No",
-        yesNo(m.attendsYouthConvention),
-        isSevak(r, m) ? "Yes" : "",
-        STATUS_LABELS[statusOf(r.status)] ?? r.status,
-        sortableIst(r.createdAt),
-      ]);
-    }
-  }
-
+  const active = all.filter(isActive);
   const fresh = active.filter(r => r.createdAt.getTime() >= since);
+  const people = (list: ReportRegistration[]) => list.reduce((n, r) => n + r.members.length, 0);
   return {
     at,
     registrations: active.length,
-    people: active.reduce((sum, r) => sum + r.members.length, 0),
-    families: active.filter(r => r.type === "family").length,
-    individuals: active.filter(r => r.type === "individual").length,
-    checkedIn: active.filter(r => statusOf(r.status) === "checked_in").length,
-    cancelled: all.length - active.length,
+    people: people(active),
     newRegistrations: fresh.length,
-    newPeople: fresh.reduce((sum, r) => sum + r.members.length, 0),
-    mandals: [...byMandal.values()].sort(
-      (a, b) => b.people - a.people || a.mandal.localeCompare(b.mandal)
-    ),
-    devotees,
+    newPeople: people(fresh),
   };
 }
 
@@ -299,80 +195,215 @@ export function templateValues(report: DailyReport): string[] {
 export const reportFileName = (report: DailyReport) =>
   `registration-report-${istClock(report.at).date}.xlsx`;
 
-/** Widest value in each column, in characters, within sensible bounds. */
-const widths = (rows: (string | number)[][]) =>
-  rows[0].map((_, column) => ({
-    width: Math.min(40, Math.max(8, ...rows.map(row => String(row[column] ?? "").length + 2))),
+/*
+ * The workbook is laid out exactly as "Dashabdi Mahotsav - Registrations.xlsx",
+ * the export the team was already using (owner's request, 2026-11-21: "it
+ * should look exactly like this"). That file was made by a one-off script on
+ * 2026-11-19; this is the same layout, built from the live database at each
+ * send: "Devotees by mandal" (everyone, a band per mandal, biggest first),
+ * "Mandal totals", then one sheet per mandal. Same 19 columns, widths, colours
+ * and wording — change them here only if the team asks for the export to change.
+ */
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "2027-01-29" → "29 Jan 2027". */
+const longDay = (iso: string) => {
+  const [y, m, d] = iso.split("-");
+  return y && m && d ? `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}` : "";
+};
+const yesNo = (value: boolean | null | undefined) =>
+  value === null || value === undefined ? "" : value ? "Yes" : "No";
+const capitalise = (value: string) => (value ? value.charAt(0).toUpperCase() + value.slice(1) : "");
+/** "29 Jan 2027 Morning". */
+const stayPoint = (point: { date: string; slot: string } | null | undefined) =>
+  point ? `${longDay(point.date)} ${capitalise(point.slot)}`.trim() : "";
+
+interface DevoteeRow {
+  sr: number;
+  code: string;
+  regCode: string;
+  name: string;
+  gender: string;
+  age: number;
+  mobile: string;
+  mandal: string;
+  type: string;
+  family: string;
+  relation: string;
+  contactName: string;
+  contactMobile: string;
+  arrival: string;
+  departure: string;
+  stay: string;
+  seva: string;
+  yc: string;
+  registered: string;
+}
+
+/** Everyone on an active registration, ordered by mandal, registration, then the contact first. */
+export function devoteeRows(all: ReportRegistration[]): DevoteeRow[] {
+  const people = all.filter(isActive).flatMap(r => {
+    const contact = r.members.find(m => m.isPrimary) ?? r.members[0];
+    return r.members.map(m => ({ r, m, contact }));
+  });
+  people.sort(
+    (a, b) =>
+      (a.r.mandal < b.r.mandal ? -1 : a.r.mandal > b.r.mandal ? 1 : 0) ||
+      a.r.sequence - b.r.sequence ||
+      (a.m.isPrimary ? 0 : 1) - (b.m.isPrimary ? 0 : 1)
+  );
+  return people.map(({ r, m, contact }, i) => ({
+    sr: i + 1,
+    code: m.code ?? "",
+    regCode: r.code,
+    name: m.fullName,
+    gender: m.gender === "male" ? "Male" : m.gender === "female" ? "Female" : m.gender,
+    age: m.age,
+    mobile: m.mobile ?? "",
+    mandal: r.mandal,
+    type: r.type === "family" ? "Family" : "Individual",
+    family: r.groupName ?? "",
+    relation: m.isPrimary ? "Primary contact" : (m.relation ?? ""),
+    contactName: contact?.fullName ?? "",
+    contactMobile: r.contactMobile ?? contact?.mobile ?? "",
+    arrival: stayPoint(m.arrival),
+    departure: stayPoint(m.departure),
+    stay: yesNo(m.needsAccommodation ?? r.accommodationRequired),
+    seva: yesNo(m.earlySeva ?? r.earlySeva),
+    yc: yesNo(m.attendsYouthConvention),
+    // The day in India, not UTC: a registration at 1 am IST belongs to that day.
+    registered: longDay(istClock(r.createdAt).date),
   }));
+}
 
-/** Two sheets: the totals and the mandal table, then every devotee. */
-export async function reportWorkbook(report: DailyReport): Promise<Buffer> {
-  const bold = (value: string | number) => ({ value, fontWeight: "bold" as const });
-  const mandalHeader = [
-    "Mandal",
-    "Registrations",
-    "People",
-    "Male",
-    "Female",
-    "Need a bed",
-    "New people (24 h)",
-  ];
-  const mandalRows = report.mandals.map(line => [
-    line.mandal,
-    line.registrations,
-    line.people,
-    line.male,
-    line.female,
-    line.beds,
-    line.newPeople,
-  ]);
-  const totals = [
-    "Total",
-    report.registrations,
-    report.people,
-    sum(report.mandals, "male"),
-    sum(report.mandals, "female"),
-    sum(report.mandals, "beds"),
-    report.newPeople,
-  ];
+const HEADER_STYLE = { fontWeight: "bold" as const, backgroundColor: "#E8EEF7" };
 
-  const summary: Row[] = [
-    [{ value: `${EVENT_NAME} — registration report`, fontWeight: "bold", fontSize: 14 }],
-    [`As of ${formatIst(report.at)} (India time)`],
-    [],
-    [bold("Registrations"), report.registrations],
-    ["  Families", report.families],
-    ["  Individuals", report.individuals],
-    [bold("People"), report.people],
+const COLUMNS: [header: string, key: keyof DevoteeRow, width: number][] = [
+  ["Sr", "sr", 5],
+  ["Person no.", "code", 11],
+  ["Registration no.", "regCode", 15],
+  ["Full name", "name", 30],
+  ["Gender", "gender", 8],
+  ["Age", "age", 6],
+  ["Mobile", "mobile", 15],
+  ["Mandal", "mandal", 18],
+  ["Type", "type", 11],
+  ["Family name", "family", 18],
+  ["Relation", "relation", 15],
+  ["Primary contact", "contactName", 28],
+  ["Contact mobile", "contactMobile", 15],
+  ["Arrival", "arrival", 22],
+  ["Departure", "departure", 22],
+  ["Accommodation", "stay", 14],
+  ["Early seva", "seva", 10],
+  ["Youth Convention", "yc", 16],
+  ["Registered on", "registered", 14],
+];
+const COLUMN_WIDTHS = COLUMNS.map(([, , width]) => ({ width }));
+
+const headerRow = (): Row => COLUMNS.map(([header]) => ({ value: header, ...HEADER_STYLE }));
+const devoteeRow = (row: DevoteeRow): Row =>
+  COLUMNS.map(([, key]) => {
+    const value = row[key];
+    if (value === "") return null;
+    return typeof value === "number" ? { value, type: Number } : { value, type: String };
+  });
+/** A cell spanning the whole table, then the empty cells it covers. */
+const spanRow = (cell: Record<string, unknown>): Row => [
+  { ...cell, columnSpan: COLUMNS.length } as Row[number],
+  ...COLUMNS.slice(1).map(() => null),
+];
+/** Excel refuses \ / ? * [ ] : in a sheet name, and more than 31 characters. */
+const sheetName = (name: string) => name.replace(/[\\/?*[\]:]/g, " ").slice(0, 31);
+
+/** The three kinds of sheet, from the registrations as stored. */
+export async function reportWorkbook(all: ReportRegistration[], at: Date): Promise<Buffer> {
+  const everyone = devoteeRows(all);
+  const asOf = longDay(istClock(at).date);
+
+  // By mandal, biggest first; Sr starts again at 1 in each.
+  const byMandal = new Map<string, DevoteeRow[]>();
+  for (const row of everyone) byMandal.set(row.mandal, [...(byMandal.get(row.mandal) ?? []), row]);
+  const groups = [...byMandal.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .map(([mandal, rows]) => [mandal, rows.map((row, i) => ({ ...row, sr: i + 1 }))] as const);
+
+  const grouped: Row[] = [
+    spanRow({
+      value: `${EVENT_NAME} — all registered devotees: ${everyone.length}`,
+      fontWeight: "bold",
+      fontSize: 14,
+    }),
+    spanRow({
+      value: `Every registration (cancelled and dummy ones left out), grouped by mandal. From the live registration database on ${asOf}.`,
+    }),
+  ];
+  for (const [mandal, rows] of groups) {
+    grouped.push(COLUMNS.map(() => null));
+    grouped.push(
+      spanRow({
+        value: `${mandal} — ${rows.length} ${rows.length === 1 ? "devotee" : "devotees"}`,
+        fontWeight: "bold",
+        fontSize: 12,
+        backgroundColor: "#FCE9C8",
+      })
+    );
+    grouped.push(headerRow());
+    for (const row of rows) grouped.push(devoteeRow(row));
+  }
+
+  const registrationsIn = (rows: DevoteeRow[]) => new Set(rows.map(row => row.regCode)).size;
+  const bold = (value: string) => ({ value, fontWeight: "bold" as const });
+  const count = (value: number, isBold = false) => ({
+    value,
+    type: Number,
+    ...(isBold ? { fontWeight: "bold" as const } : {}),
+  });
+  const totals: Row[] = [
     [
-      "New in the last 24 hours",
-      `${report.newPeople} people in ${report.newRegistrations} registrations`,
+      { value: `${EVENT_NAME} — all registered devotees`, fontWeight: "bold", fontSize: 14 },
+      null,
+      null,
     ],
-    ["Checked in", report.checkedIn],
-    ["Cancelled (not counted above)", report.cancelled],
-    [],
-    mandalHeader.map(bold),
-    ...mandalRows,
-    totals.map(bold),
+    [
+      {
+        value: `Every registration (cancelled and dummy ones left out). From the live registration database on ${asOf}.`,
+      },
+      null,
+      null,
+    ],
+    [null, null, null],
+    [bold("Total registrations"), count(registrationsIn(everyone), true), null],
+    [bold("Total devotees"), count(everyone.length, true), null],
+    [null, null, null],
+    [
+      { value: "Mandal", ...HEADER_STYLE },
+      { value: "Registrations", ...HEADER_STYLE },
+      { value: "Devotees", ...HEADER_STYLE },
+    ],
+    ...groups.map(([mandal, rows]): Row => [
+      { value: mandal },
+      count(registrationsIn(rows)),
+      count(rows.length),
+    ]),
+    [bold("Total"), count(registrationsIn(everyone), true), count(everyone.length, true)],
   ];
 
   return writeXlsxFile([
+    { sheet: "Devotees by mandal", data: grouped, columns: COLUMN_WIDTHS },
     {
-      sheet: "Summary",
-      data: summary,
-      columns: [{ width: 30 }, ...widths([mandalHeader, ...mandalRows]).slice(1)],
+      sheet: "Mandal totals",
+      data: totals,
+      columns: [{ width: 40 }, { width: 14 }, { width: 10 }],
     },
-    {
-      sheet: "Devotees",
-      data: [DEVOTEE_HEADER.map(bold), ...report.devotees],
-      columns: widths([DEVOTEE_HEADER, ...report.devotees]),
+    ...groups.map(([mandal, rows]) => ({
+      sheet: sheetName(mandal),
+      data: [headerRow(), ...rows.map(devoteeRow)],
+      columns: COLUMN_WIDTHS,
       stickyRowsCount: 1,
-    },
+    })),
   ]).toBuffer();
 }
-
-const sum = (lines: MandalLine[], key: "male" | "female" | "beds") =>
-  lines.reduce((total, line) => total + line[key], 0);
 
 /** Today's report from the database. Dummy data never appears in it. */
 export async function buildDailyReport(at = new Date()) {
@@ -382,9 +413,9 @@ export async function buildDailyReport(at = new Date()) {
       code: true,
       sequence: true,
       type: true,
+      groupName: true,
       mandal: true,
       members: true,
-      travel: true,
       accommodationRequired: true,
       earlySeva: true,
       status: true,
@@ -393,7 +424,11 @@ export async function buildDailyReport(at = new Date()) {
     },
   });
   const report = summarise(registrations, at);
-  return { report, bytes: await reportWorkbook(report), filename: reportFileName(report) };
+  return {
+    report,
+    bytes: await reportWorkbook(registrations, at),
+    filename: reportFileName(report),
+  };
 }
 
 // ---------------------------------------------------------------------------

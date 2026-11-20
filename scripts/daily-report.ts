@@ -46,7 +46,7 @@ async function main() {
   const { report, bytes } = await buildDailyReport();
   await writeFile(path, bytes);
   console.log(`Values: ${templateValues(report).join(" | ")}`);
-  console.log(`${report.mandals.length} mandals, ${report.devotees.length} people → ${path}`);
+  console.log(`${report.registrations} registrations, ${report.people} people → ${path}`);
 }
 
 main()

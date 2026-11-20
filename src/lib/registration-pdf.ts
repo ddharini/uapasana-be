@@ -37,7 +37,7 @@ type Member = Registration["members"][number];
 type Travel = NonNullable<Member["travel"]>;
 
 /** Mirrors TRAVEL_MODES in the frontend's features/registrations/types.ts. */
-export const TRAVEL_LABELS: Record<string, string> = {
+const TRAVEL_LABELS: Record<string, string> = {
   personal_vehicle: "Personal vehicle",
   mandal_bus: "Mandal bus",
   train: "Train",
@@ -49,7 +49,7 @@ export const TRAVEL_LABELS: Record<string, string> = {
   separate: "Travelling separately",
 };
 
-export const STATUS_LABELS: Record<string, string> = {
+const STATUS_LABELS: Record<string, string> = {
   confirmed: "Registered",
   checked_in: "Checked in",
   cancelled: "Cancelled",

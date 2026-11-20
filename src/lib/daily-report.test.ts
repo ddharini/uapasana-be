@@ -23,6 +23,7 @@ vi.mock("./whatsapp", async importOriginal => ({
 
 import {
   DAILY_REPORT_PURPOSE,
+  devoteeRows,
   istClock,
   parseRecipients,
   parseReportTime,
@@ -107,7 +108,7 @@ describe("istClock", () => {
 });
 
 describe("summarise", () => {
-  it("leaves cancelled out of every count and the list, and counts it on its own", () => {
+  it("leaves cancelled out of the message's numbers", () => {
     const report = summarise(
       [
         registration({
@@ -118,19 +119,7 @@ describe("summarise", () => {
       ],
       at
     );
-    expect(report).toMatchObject({
-      registrations: 2,
-      people: 3,
-      families: 1,
-      individuals: 1,
-      checkedIn: 1,
-      cancelled: 1,
-    });
-    expect(report.devotees).toHaveLength(3);
-    expect(report.mandals.map(line => [line.mandal, line.people, line.male, line.female])).toEqual([
-      ["Surat", 2, 1, 1],
-      ["Vadodara", 1, 1, 0],
-    ]);
+    expect(report).toMatchObject({ registrations: 2, people: 3 });
   });
 
   it("counts as new only what was registered in the 24 hours before", () => {
@@ -145,23 +134,60 @@ describe("summarise", () => {
       at
     );
     expect([report.newRegistrations, report.newPeople]).toEqual([1, 2]);
-    expect(report.mandals[0].newPeople).toBe(2);
+  });
+});
+
+describe("devoteeRows", () => {
+  it("has the 19 columns of the team's export, in its order and wording", () => {
+    const [row] = devoteeRows([
+      registration({
+        code: "DM-F-0143",
+        groupName: "Pandya family",
+        createdAt: new Date("2026-10-27T19:00:00Z"), // 28 Oct in India
+        members: [person({ code: "DM-0239", fullName: "Sunil Pandya", age: 65 })],
+      }),
+    ]);
+    expect(row).toEqual({
+      sr: 1,
+      code: "DM-0239",
+      regCode: "DM-F-0143",
+      name: "Sunil Pandya",
+      gender: "Male",
+      age: 65,
+      mobile: "",
+      mandal: "Surat",
+      type: "Family",
+      family: "Pandya family",
+      relation: "Primary contact",
+      contactName: "Sunil Pandya",
+      contactMobile: "+919876543210",
+      arrival: "29 Jan 2027 Morning",
+      departure: "1 Feb 2027 Evening",
+      stay: "Yes",
+      seva: "",
+      yc: "Yes",
+      registered: "28 Oct 2026",
+    });
   });
 
-  it("reads a separately travelling person's own mode, and a bed only when asked for", () => {
-    const report = summarise(
-      [
-        registration({
-          travel: { mode: "separate" },
-          members: [person({ travel: { mode: "flight" }, needsAccommodation: false })],
-        }),
-      ],
-      at
-    );
-    const row = report.devotees[0];
-    expect(row[10]).toBe("Flight");
-    expect(row[11]).toBe("No");
-    expect(row[7]).toBe("+919876543210"); // the contact's number, from the registration
+  it("drops cancelled, and orders by mandal, registration, then the contact first", () => {
+    const rows = devoteeRows([
+      registration({ mandal: "Vadodara", sequence: 1 }),
+      registration({
+        mandal: "Surat",
+        sequence: 5,
+        members: [
+          person({ fullName: "Child", isPrimary: false, relation: "Son" }),
+          person({ fullName: "Parent" }),
+        ],
+      }),
+      registration({ mandal: "Anand", status: "cancelled" }),
+    ]);
+    expect(rows.map(r => [r.mandal, r.name, r.relation, r.contactName])).toEqual([
+      ["Surat", "Parent", "Primary contact", "Parent"],
+      ["Surat", "Child", "Son", "Parent"],
+      ["Vadodara", "Harit Patel", "Primary contact", "Harit Patel"],
+    ]);
   });
 });
 
@@ -189,7 +215,7 @@ describe("templateComponents with a document", () => {
 
 describe("reportWorkbook", () => {
   it("is an .xlsx file", async () => {
-    const bytes = await reportWorkbook(summarise([registration()], at));
+    const bytes = await reportWorkbook([registration()], at);
     expect(bytes.subarray(0, 2).toString()).toBe("PK");
   });
 });
