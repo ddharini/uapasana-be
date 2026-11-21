@@ -23,6 +23,12 @@ vi.mock("./whatsapp", async importOriginal => ({
 
 import {
   DAILY_REPORT_PURPOSE,
+  YOUTH_REPORT,
+  YOUTH_REPORT_PURPOSE,
+  sendReportIfDue,
+  youthReportConfig,
+  youthTemplateValues,
+  youthWorkbook,
   devoteeRows,
   istClock,
   parseRecipients,
@@ -277,5 +283,71 @@ describe("sendDailyReportIfDue", () => {
     expect(wa.sendWhatsAppTemplate).toHaveBeenCalledTimes(2);
     await sendDailyReportIfDue(new Date(later.getTime() + 5 * 60 * 1000));
     expect(wa.sendWhatsAppTemplate).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the Youth Convention report", () => {
+  const yc = [
+    registration({
+      createdAt: new Date("2026-11-21T09:00:00Z"),
+      members: [
+        person({ fullName: "Yes", attendsYouthConvention: true }),
+        person({ fullName: "No", attendsYouthConvention: false, isPrimary: false }),
+        person({ fullName: "Unasked", attendsYouthConvention: null, isPrimary: false }),
+      ],
+    }),
+    registration({ members: [person({ fullName: "Older yes", attendsYouthConvention: true })] }),
+    registration({ status: "cancelled", members: [person({ attendsYouthConvention: true })] }),
+  ];
+
+  it("lists only those who said yes, from active registrations", () => {
+    expect(devoteeRows(yc, m => m.attendsYouthConvention === true).map(r => r.name)).toEqual([
+      "Yes",
+      "Older yes",
+    ]);
+  });
+
+  it("gives the three values: when, attending, and new in 24 hours", () => {
+    expect(youthTemplateValues(yc, at)).toEqual(["21 Nov 2026, 4:00 pm", "2", "1 devotee"]);
+  });
+
+  it("is an .xlsx file", async () => {
+    const bytes = await youthWorkbook(yc, at);
+    expect(bytes.subarray(0, 2).toString()).toBe("PK");
+  });
+
+  it("uses its own numbers and time, or the registration report's when empty", () => {
+    process.env.DAILY_REPORT_TO = "+919811111111";
+    process.env.DAILY_REPORT_AT = "16:00";
+    expect(youthReportConfig()).toEqual({ recipients: ["919811111111"], atMinutes: 960 });
+    process.env.YC_REPORT_TO = "+919833333333";
+    process.env.YC_REPORT_AT = "17:30";
+    expect(youthReportConfig()).toEqual({ recipients: ["919833333333"], atMinutes: 1050 });
+    delete process.env.YC_REPORT_TO;
+    delete process.env.YC_REPORT_AT;
+    delete process.env.DAILY_REPORT_TO;
+    delete process.env.DAILY_REPORT_AT;
+  });
+
+  it("sends its own template and file, and counts only its own sends as done", async () => {
+    process.env.DAILY_REPORT_TO = "+919811111111";
+    db.registration.findMany.mockResolvedValue(yc);
+    db.whatsAppMessage.findMany.mockResolvedValue([]);
+    wa.uploadWhatsAppMedia.mockResolvedValue("media-yc");
+    wa.sendWhatsAppTemplate.mockResolvedValue({ waMessageId: "wamid.yc" });
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await sendReportIfDue(YOUTH_REPORT, new Date("2026-11-23T10:31:00Z"));
+
+    expect(db.whatsAppMessage.findMany.mock.calls[0][0].where.purpose).toBe(YOUTH_REPORT_PURPOSE);
+    expect(wa.sendWhatsAppTemplate.mock.calls[0][0]).toMatchObject({
+      to: "919811111111",
+      template: "daily_youth_convention_registrations_report",
+      body: ["23 Nov 2026, 4:01 pm", "2", "0 devotees"],
+      document: { id: "media-yc", filename: "youth-convention-report-2026-11-23.xlsx" },
+      usage: { endpoint: YOUTH_REPORT_PURPOSE },
+    });
+    delete process.env.DAILY_REPORT_TO;
+    vi.clearAllMocks();
   });
 });

@@ -1,39 +1,44 @@
 /**
- * The daily registration report, by hand (lib/daily-report.ts).
+ * The daily reports, by hand (lib/daily-report.ts).
  *
- *   pnpm report:daily <file.xlsx>                writes the workbook, sends nothing
- *   pnpm report:daily --send <number>[,<number>]  sends it on WhatsApp now
+ *   pnpm report:daily [--youth] <file.xlsx>                writes the workbook, sends nothing
+ *   pnpm report:daily [--youth] --send <number>[,<number>]  sends it on WhatsApp now
+ *
+ * Without `--youth`, the registration report; with it, the Youth Convention one.
  *
  * Reads whichever database `DATABASE_URL` names — print-checked below — and
  * never writes to it beyond the WhatsApp message log. A `--send` is a paid
- * Utility message per number, logged as `whatsapp:daily_report_test`, so it
- * never stands in for the 4 pm report: the people it went to still get that one.
+ * Utility message per number, logged under the report's test purpose, so it
+ * never stands in for the scheduled report: the people it went to still get that one.
  */
 import "../src/env";
 
 import { writeFile } from "fs/promises";
 
 import {
-  DAILY_REPORT_TEST_PURPOSE,
-  buildDailyReport,
+  REGISTRATION_REPORT,
+  YOUTH_REPORT,
   parseRecipients,
-  sendDailyReport,
-  templateValues,
+  sendReport,
 } from "../src/lib/daily-report";
 import { prisma } from "../src/utils/db";
 
 const host = (process.env.DATABASE_URL ?? "").replace(/^.*@([^/?]+).*$/, "$1") || "(none)";
+const USAGE =
+  "Usage: pnpm report:daily [--youth] <file.xlsx> | [--youth] --send <number>[,<number>]";
 
 async function main() {
-  const args = process.argv.slice(2);
+  let args = process.argv.slice(2);
+  const kind = args[0] === "--youth" ? YOUTH_REPORT : REGISTRATION_REPORT;
+  if (args[0] === "--youth") args = args.slice(1);
   console.log(`Database: ${host}`);
+  console.log(`Report: ${kind.name}`);
 
   if (args[0] === "--send") {
     const recipients = parseRecipients(args.slice(1).join(","));
-    if (recipients.length === 0)
-      throw new Error("Usage: pnpm report:daily --send <number>[,<number>]");
-    const { report, results } = await sendDailyReport(recipients, DAILY_REPORT_TEST_PURPOSE);
-    console.log(`Values: ${templateValues(report).join(" | ")}`);
+    if (recipients.length === 0) throw new Error(USAGE);
+    const { report, results } = await sendReport(kind, recipients, kind.testPurpose);
+    console.log(`Values: ${report.values.join(" | ")}`);
     for (const result of results)
       console.log(
         `${result.to}: ${result.waMessageId ? `accepted ${result.waMessageId}` : result.error}`
@@ -42,11 +47,11 @@ async function main() {
   }
 
   const path = args[0];
-  if (!path) throw new Error("Usage: pnpm report:daily <file.xlsx> | --send <number>[,<number>]");
-  const { report, bytes } = await buildDailyReport();
-  await writeFile(path, bytes);
-  console.log(`Values: ${templateValues(report).join(" | ")}`);
-  console.log(`${report.registrations} registrations, ${report.people} people → ${path}`);
+  if (!path) throw new Error(USAGE);
+  const report = await kind.build(new Date());
+  await writeFile(path, report.bytes);
+  console.log(`Values: ${report.values.join(" | ")}`);
+  console.log(`${report.summary} → ${path}`);
 }
 
 main()

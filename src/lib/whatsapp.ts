@@ -73,6 +73,9 @@ export const WHATSAPP_TEMPLATES = {
    * {{4}} new in the last 24 hours. Utility, English. See lib/daily-report.ts.
    */
   dailyReport: () => process.env.WA_TEMPLATE_DAILY_REPORT || "daily_registration_report",
+  /** Document header; {{1}} when, {{2}} devotees attending, {{3}} new in the last 24 hours. Utility, English. */
+  youthReport: () =>
+    process.env.WA_TEMPLATE_YC_REPORT || "daily_youth_convention_registrations_report",
   /** {{1}} contact's name, {{2}} event, {{3}} where everyone stays, on one line. Paused feature. */
   stayDetails: () => process.env.WA_TEMPLATE_ROOM_DETAILS || "room_details",
 };
